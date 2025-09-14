@@ -2,23 +2,18 @@ import { Routes } from '@angular/router';
 import {LoginComponent} from './auth/login/login.component';
 import {ChatComponent} from './chat/chat.component';
 import {VerifyAuthComponent} from './auth/verify-auth/verify-auth.component';
-import { authGuard } from './auth/auth.guard';
-import { guestGuard } from './auth/guest.guard';
 
 export const routes: Routes = [
   {
     path: '',
     component: ChatComponent,
-    canActivate: [authGuard]
   },
   {
     path: 'login',
-    component: LoginComponent,
-    canActivate: [guestGuard]
+    component: LoginComponent
   },
   {
     path: 'auth/verify',
-    component: VerifyAuthComponent,
-    canActivate: [guestGuard]
+    component: VerifyAuthComponent
   }
 ];

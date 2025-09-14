@@ -1,3 +1,9 @@
 export const environment = {
-  authRedirectUrl: 'http://localhost:4200/auth/redirect'
+  authRedirectUrl: 'http://localhost:4200/auth/redirect',
+  appwriteEndpoint: '',
+  appwriteProjectId: '',
+  appwriteDatabaseId: '',
+  appwriteMessagesCollectionId: '',
+  appwritePresenceCollectionId: '',
+  appwriteBucketId: ''
 };

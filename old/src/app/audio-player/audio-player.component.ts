@@ -50,6 +50,7 @@ export class AudioPlayerComponent implements AfterViewInit {
     });
 
     this.wavesurfer.on('audioprocess', (timestamp) => {
+      console.log(timestamp)
       this.audioLength = this.formatTime(timestamp);
       this.cdr.detectChanges();
     });

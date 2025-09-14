@@ -1,5 +1,14 @@
 <div class="flex flex-col gap-y-4 max-w-[1200px] m-auto h-screen px-4">
-  <app-header></app-header>
+  <header class="border-b border-gray-900">
+    <nav class="flex justify-between items-center py-6">
+      <h1 class="text-3xl font-bold">ChatVerse</h1>
+
+      <ul class="flex list-none gap-x-6">
+        <li><a href="#">Home</a></li>
+        <li><a href="#">Logout</a></li>
+      </ul>
+    </nav>
+  </header>
 
   <!-- Status Bar -->
   <!--  <div class="flex items-center justify-between gap-4 text-sm ct-bg-light border border-[#232323] rounded-xl py-4 px-6">-->
@@ -23,14 +32,14 @@
   <div class="grow w-full h-full overflow-hidden">
     <div class="flex space-y-6 space-x-3 h-full py-4">
       <!-- User List section -->
-      <div class="flex flex-col my-0  gap-4 w-[300px] text-sm">
+      <div class="flex flex-col gap-4 w-[300px] text-sm">
         <!-- Search -->
         <div class="flex gap-x-2 items-center ct-bg-light rounded-xl py-3 px-4 text-gray-400">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5">
             <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
           </svg>
           <div class="grow">
-            <input type="text" [(ngModel)]="searchTerm" placeholder="Search .." class="text-white placeholder-gray-400 border-0 outline-none w-full">
+            <input type="text" placeholder="Search .." class="text-white placeholder-gray-400 border-0 outline-none w-full">
           </div>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="size-3">
             <path fill-rule="evenodd" d="M13.25 2a.75.75 0 0 0-.75.75v6.5H4.56l.97-.97a.75.75 0 0 0-1.06-1.06L2.22 9.47a.75.75 0 0 0 0 1.06l2.25 2.25a.75.75 0 0 0 1.06-1.06l-.97-.97h8.69A.75.75 0 0 0 14 10V2.75a.75.75 0 0 0-.75-.75Z" clip-rule="evenodd" />
@@ -41,26 +50,85 @@
         <div class="flex flex-col flex-1 gap-2 ct-bg-light rounded-xl overflow-y-auto">
           <span class="font-semibold  pl-4 pt-4">Online users</span>
           <div class="flex flex-col gap-2 py-2 px-1 ct-bg-light rounded-xl">
-            @for (user of filteredUsers; track user.id) {
-              <div (click)="selectUser(user)" class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3" [ngClass]="{'ct-bg-semi-dark': user.id === selectedUserId}">
-                <img [src]="user.avatarUrl" alt="Profile" class="h-10 w-10 rounded-full">
-                <div class="flex-1">
-                  <div class="flex justify-between text-white">
-                    <span class="font-semibold">{{ user.name }}</span>
-                    <span class="text-xs">{{ user.lastActiveTime }}</span>
-                  </div>
-                  <span class="text-gray-400 text-xs w-full">{{ user.lastMessage }}</span>
+            <div class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3">
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-10 w-10 rounded-full">
+              <div class="flex-1">
+                <div class="flex justify-between text-white">
+                  <span class="font-semibold">Ashik Basheer</span>
+                  <span class="text-xs">8:15 PM</span>
                 </div>
+                <span class="text-gray-400 text-xs w-full">
+                      This is my first message in the group and for today and tomorrow
+                    </span>
               </div>
-            }
-            @if (filteredUsers.length === 0) {
-              <div class="flex flex-col items-center justify-center py-6 text-gray-400">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-2/5 h-auto">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-                </svg>
-                <span class="mt-3 text-xs">No users found</span>
+            </div>
+            <div class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3 ct-bg-semi-dark">
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-10 w-10 rounded-full">
+              <div class="flex-1">
+                <div class="flex justify-between text-white">
+                  <span class="font-semibold">Ashik Basheer</span>
+                  <span class="text-xs">8:15 PM</span>
+                </div>
+                <span class="text-gray-400 text-xs">
+                      This is my first message in the group
+                    </span>
               </div>
-            }
+            </div>
+            <div class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3">
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-10 w-10 rounded-full">
+              <div class="flex-1">
+                <div class="flex justify-between text-white">
+                  <span class="font-semibold">Ashik Basheer</span>
+                  <span class="text-xs">8:15 PM</span>
+                </div>
+                <span class="text-gray-400 text-xs">
+                      This is my first message in the group
+                    </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Offline Users -->
+        <div class="flex flex-col flex-1 gap-2 ct-bg-light rounded-xl overflow-y-auto">
+          <span class="font-semibold pl-4 pt-4">Offline users</span>
+          <div class="flex flex-col gap-2 py-2 px-1 rounded-xl">
+            <div class="relative chat-user cursor-pointer flex items-start space-x-3 p-3">
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-10 w-10 rounded-full">
+              <div class="flex-1">
+                <div class="flex justify-between text-white">
+                  <span class="font-semibold">Ashik Basheer</span>
+                  <span class="text-xs">8:15 PM</span>
+                </div>
+                <span class="text-gray-400 text-xs">
+                      This is my first message in the group
+                    </span>
+              </div>
+            </div>
+            <div class="relative chat-user cursor-pointer flex items-start space-x-3 p-3">
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-10 w-10 rounded-full">
+              <div class="flex-1">
+                <div class="flex justify-between text-white">
+                  <span class="font-semibold">Ashik Basheer</span>
+                  <span class="text-xs">8:15 PM</span>
+                </div>
+                <span class="text-gray-400 text-xs">
+                      This is my first message in the group
+                    </span>
+              </div>
+            </div>
+            <div class="relative chat-user cursor-pointer flex items-start space-x-3 p-3">
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-10 w-10 rounded-full">
+              <div class="flex-1">
+                <div class="flex justify-between text-white">
+                  <span class="font-semibold">Ashik Basheer</span>
+                  <span class="text-xs">8:15 PM</span>
+                </div>
+                <span class="text-gray-400 text-xs">
+                      This is my first message in the group
+                    </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -70,8 +138,8 @@
           <!-- Chat Header -->
           <div class="flex justify-between items-center ct-bg-semi-dark py-4 px-6">
             <div class="flex items-center space-x-3">
-              <img [src]="selectedUser?.avatarUrl || 'assets/images/profile.jpeg'" alt="Profile" class="h-6 w-6 rounded-full">
-              <span class="text-lg font-bold">{{ selectedUser?.name || 'Select a chat' }}</span>
+              <img src="https://ntrepidcorp.com/wp-content/uploads/2016/06/team-1.jpg" alt="Profile" class="h-6 w-6 rounded-full">
+              <span class="text-lg font-bold">Ashik Basheer</span>
             </div>
             <div class="flex items-center space-x-4">
               <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Clear Chat</span>
@@ -116,7 +184,7 @@
         </div>
         <!-- Chat Composer -->
         <div class="flex space-x-3 items-center h-10 w-full">
-          <textarea [(ngModel)]="message" (keydown)="onComposerKeydown($event)" placeholder="Write a message ..." rows="1" class="flex-1 resize-none text-white text-sm ct-bg-light placeholder-gray-400 outline-none h-full px-4 py-2 border border-black rounded-lg"></textarea>
+          <input type="text" [(ngModel)]="message" placeholder="Write a message ..." class="flex-1 text-white text-sm ct-bg-light placeholder-gray-400 outline-none h-full px-4 border border-black rounded-lg">
           <span class="send-image flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
                   <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />

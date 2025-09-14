@@ -1,4 +1,4 @@
-<div class="flex items-start space-x-2 pt-1">
+<div class="flex items-start space-x-2 pt-1 relative">
   <span (click)="playAudio()" class="send-message flex items-center justify-center w-10 h-full rounded-lg cursor-pointer">
     @if (audioStatus === 'playing') {
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-6" [ngClass]="data.isSentByMe ? 'text-white' : 'text-indigo-500'">
@@ -13,8 +13,19 @@
   <div class="flex flex-col space-y-1 grow">
     <div #waveform>
     </div>
-    <div class="flex justify-between">
-      <span class="text-xs">{{ audioLength }}</span>
+    <div class="flex justify-between items-center">
+      <div class="flex items-center space-x-2">
+        <span class="text-xs">{{ audioLength }}</span>
+        <!-- Speed Control Button -->
+        <button 
+          (click)="cycleSpeed()" 
+          class="text-xs px-2 py-1 rounded-md transition-colors duration-200 hover:scale-105"
+          [ngClass]="data.isSentByMe ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-gray-600 text-gray-200 hover:bg-gray-500'"
+          title="Click to change speed"
+        >
+          {{ getSpeedLabel() }}
+        </button>
+      </div>
       <div class="text-xs text-gray-400 pl-2">{{ data.dateTime }}</div>
     </div>
   </div>

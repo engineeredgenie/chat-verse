@@ -17,6 +17,11 @@ export class AudioPlayerComponent implements AfterViewInit {
   wavesurfer!: WaveSurfer;
   audioStatus: 'playing' | 'paused' | 'finished' = 'finished';
   audioLength: string = '';
+  
+  // Speed control properties
+  currentSpeed: number = 1;
+  speedOptions: number[] = [1, 1.5, 2];
+  currentSpeedIndex: number = 0;
 
   constructor(private cdr: ChangeDetectorRef) {
   }
@@ -91,6 +96,21 @@ export class AudioPlayerComponent implements AfterViewInit {
 
   playAudio() {
     this.wavesurfer.playPause();
+  }
+
+  cycleSpeed() {
+    // Cycle to next speed
+    this.currentSpeedIndex = (this.currentSpeedIndex + 1) % this.speedOptions.length;
+    this.currentSpeed = this.speedOptions[this.currentSpeedIndex];
+    
+    // Apply speed to audio
+    if (this.wavesurfer) {
+      this.wavesurfer.setPlaybackRate(this.currentSpeed);
+    }
+  }
+
+  getSpeedLabel(): string {
+    return this.currentSpeed === 1 ? '1x' : `${this.currentSpeed}x`;
   }
 
   formatTime(seconds: number): string {

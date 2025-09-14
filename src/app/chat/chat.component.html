@@ -66,82 +66,123 @@
       </div>
       <!-- Chat Meta -->
       <div class="grow flex flex-col h-full space-y-3">
-        <div class="flex flex-col flex-1 rounded-xl overflow-hidden">
-          <!-- Chat Header -->
-          <div class="flex justify-between items-center ct-bg-semi-dark py-4 px-6">
-            <div class="flex items-center space-x-3">
-              <img [src]="selectedUser?.avatarUrl || 'assets/images/profile.jpeg'" alt="Profile" class="h-6 w-6 rounded-full">
-              <span class="text-lg font-bold">{{ selectedUser?.name || 'Select a chat' }}</span>
+        @if (selectedUserId) {
+          <div class="flex flex-col flex-1 rounded-xl overflow-hidden">
+            <!-- Chat Header -->
+            <div class="flex justify-between items-center ct-bg-semi-dark py-4 px-6">
+              <div class="flex items-center space-x-3">
+                <img [src]="selectedUser?.avatarUrl || 'assets/images/profile.jpeg'" alt="Profile" class="h-6 w-6 rounded-full">
+                <span class="text-lg font-bold">{{ selectedUser?.name || 'Select a chat' }}</span>
+              </div>
+              <div class="flex items-center space-x-4">
+                <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Clear Chat</span>
+                <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Files</span>
+              </div>
             </div>
-            <div class="flex items-center space-x-4">
-              <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Clear Chat</span>
-              <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Files</span>
-            </div>
-          </div>
-          <!-- Chat Messages -->
-          <div class="grow flex flex-col space-y-6 ct-bg-light overflow-y-auto p-4">
-            @for (msg of messages; track msg) {
-              @if (msg.type === 'text') {
-                <div class="flex flex-col space-y-1 text-sm" [ngClass]="{'items-end' : msg.isSentByMe}">
-                  <div class="rounded-xl w-fit max-w-3/4 py-2 px-3" [ngClass]="msg.isSentByMe ? 'bg-indigo-500' : 'ct-bg-semi-dark'">
-                    {{ msg.data }}
-                  </div>
-                  <div class="text-xs text-gray-400 pl-2">{{ msg.dateTime }}</div>
-                </div>
-              } @else if (msg.type === 'image') {
-                <div class="flex flex-col space-y-1 text-sm" [ngClass]="{'items-end' : msg.isSentByMe}">
-                  <div class="rounded-xl w-fit max-w-3/4 py-2 px-3" [ngClass]="msg.isSentByMe ? 'bg-indigo-500' : 'ct-bg-semi-dark'">
-                    {{ msg.data }}
-                  </div>
-                  <div class="text-xs text-gray-400 pl-2">{{ msg.dateTime }}</div>
-                </div>
-              } @else if (msg.type === 'audio') {
-                <div class="flex flex-col space-y-1 text-sm w-full" [ngClass]="{'items-end' : msg.isSentByMe}">
-                  <div class="rounded-xl w-full md:w-[380px] py-2 px-3" [ngClass]="msg.isSentByMe ? 'bg-indigo-500' : 'ct-bg-semi-dark'">
-                    <app-audio-player [data]="msg"></app-audio-player>
+            <!-- Chat Messages -->
+            <div class="grow flex flex-col ct-bg-light overflow-y-auto p-4 relative chat-messages-container" (scroll)="onScroll($event)">
+              <!-- Sticky Date Header -->
+              @if (showStickyHeader && currentStickyDate) {
+                <div class="sticky top-0 z-10 flex justify-center py-2 mb-4">
+                  <div class="bg-gray-800 text-gray-200 text-xs px-4 py-2 rounded-full shadow-lg border border-gray-600 backdrop-blur-sm">
+                    {{ currentStickyDate }}
                   </div>
                 </div>
               }
-            }
-
-            <!--              <div class="flex flex-col items-end space-y-1 text-sm">-->
-            <!--                <div class="rounded-xl bg-indigo-500 w-fit max-w-3/4 p-2">-->
-            <!--                  Hi buddy, How you doing? ...... Hi buddy, How you doing? ...... Hi buddy, How you doing? ...... Hi buddy, How you doing? ......-->
-            <!--                </div>-->
-            <!--                <div class="text-xs text-gray-400 pl-2">04:24 PM</div>-->
-            <!--              </div>-->
-
-
+              
+              <div class="flex flex-col space-y-6">
+                @for (msg of messages; track msg; let i = $index) {
+                  <!-- Static Date Header (WhatsApp style) -->
+                  @if (shouldShowStaticDateHeader(i)) {
+                    <div class="flex justify-center my-6" [attr.data-message-index]="i">
+                      <div class="bg-gray-700 text-gray-300 text-xs px-4 py-2 rounded-full shadow-sm border border-gray-600">
+                        {{ formatDateHeader(msg.fullDate) }}
+                      </div>
+                    </div>
+                  }
+                  
+                  @if (msg.type === 'text') {
+                    <div class="flex flex-col space-y-1 text-sm" [ngClass]="{'items-end' : msg.isSentByMe}" [attr.data-message-index]="i">
+                      <div class="rounded-xl w-fit max-w-3/4 py-2 px-3" [ngClass]="msg.isSentByMe ? 'bg-indigo-500' : 'ct-bg-semi-dark'">
+                        {{ msg.data }}
+                      </div>
+                      <div class="text-xs text-gray-400 pl-2">{{ msg.dateTime }}</div>
+                    </div>
+                  } @else if (msg.type === 'image') {
+                    <div class="flex flex-col space-y-1 text-sm" [ngClass]="{'items-end' : msg.isSentByMe}" [attr.data-message-index]="i">
+                      <div class="rounded-xl w-fit max-w-3/4 py-2 px-3" [ngClass]="msg.isSentByMe ? 'bg-indigo-500' : 'ct-bg-semi-dark'">
+                        {{ msg.data }}
+                      </div>
+                      <div class="text-xs text-gray-400 pl-2">{{ msg.dateTime }}</div>
+                    </div>
+                  } @else if (msg.type === 'audio') {
+                    <div class="flex flex-col space-y-1 text-sm w-full" [ngClass]="{'items-end' : msg.isSentByMe}" [attr.data-message-index]="i">
+                      <div class="rounded-xl w-full md:w-[380px] py-2 px-3" [ngClass]="msg.isSentByMe ? 'bg-indigo-500' : 'ct-bg-semi-dark'">
+                        <app-audio-player [data]="msg"></app-audio-player>
+                      </div>
+                      <div class="text-xs text-gray-400 pl-2">{{ msg.dateTime }}</div>
+                    </div>
+                  }
+                }
+              </div>
+            </div>
           </div>
-        </div>
-        <!-- Chat Composer -->
-        <div class="flex space-x-3 items-center h-10 w-full">
-          <textarea [(ngModel)]="message" (keydown)="onComposerKeydown($event)" placeholder="Write a message ..." rows="1" class="flex-1 resize-none text-white text-sm ct-bg-light placeholder-gray-400 outline-none h-full px-4 py-2 border border-black rounded-lg"></textarea>
-          <span class="send-image flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
+          <!-- Chat Composer -->
+          <div class="flex space-x-3 items-center h-10 w-full">
+            <textarea [(ngModel)]="message" (keydown)="onComposerKeydown($event)" placeholder="Write a message ..." rows="1" class="flex-1 resize-none text-white text-sm ct-bg-light placeholder-gray-400 outline-none h-full px-4 py-2 border border-black rounded-lg"></textarea>
+            <span class="send-image flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                  </svg>
+                </span>
+            @if (!isRecording) {
+              <span (click)="startRecording()" class="send-audio flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                  </svg>
+              </span>
+            } @else {
+              <span (click)="stopRecording()" class="send-audio flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z" />
                 </svg>
               </span>
-          @if (!isRecording) {
-            <span (click)="startRecording()" class="send-audio flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-                </svg>
-            </span>
-          } @else {
-            <span (click)="stopRecording()" class="send-audio flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z" />
+            }
+
+            <span (click)="sendTextMessage()" class="send-message flex items-center justify-center w-10 h-full bg-indigo-500 rounded-lg cursor-pointer">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="#ffffff" class="size-6">
+                <path fill="#ffffff" stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
               </svg>
             </span>
-          }
-
-          <span (click)="sendTextMessage()" class="send-message flex items-center justify-center w-10 h-full bg-indigo-500 rounded-lg cursor-pointer">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="#ffffff" class="size-6">
-              <path fill="#ffffff" stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
-            </svg>
-          </span>
-        </div>
+          </div>
+        } @else {
+          <!-- Select a Chat Message -->
+          <div class="flex flex-col flex-1 rounded-xl overflow-hidden ct-bg-light">
+            <div class="flex flex-col items-center justify-center h-full space-y-6 p-8">
+              <!-- Chat Icon -->
+              <div class="w-24 h-24 rounded-full ct-bg-semi-dark flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-12 h-12 text-gray-400">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
+                </svg>
+              </div>
+              
+              <!-- Main Message -->
+              <div class="text-center space-y-3">
+                <h2 class="text-2xl font-bold text-white">Select a Chat</h2>
+                <p class="text-gray-400 text-lg max-w-md">
+                  Choose a conversation from the list to start chatting and see your messages here.
+                </p>
+              </div>
+              
+              <!-- Decorative Elements -->
+              <div class="flex space-x-2">
+                <div class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
+                <div class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style="animation-delay: 0.2s"></div>
+                <div class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" style="animation-delay: 0.4s"></div>
+              </div>
+            </div>
+          </div>
+        }
       </div>
     </div>
   </div>

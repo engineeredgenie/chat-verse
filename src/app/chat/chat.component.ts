@@ -29,6 +29,20 @@ export class ChatComponent implements OnInit, OnDestroy{
   private stopPresence?: () => void;
   private unsubscribePresence?: () => void;
 
+  // Sticky date header
+  currentStickyDate: string = '';
+  showStickyHeader: boolean = false;
+  stickyDateIndex: number = -1; // Index of the message that should be sticky
+
+  // WhatsApp-style scroll behavior
+  isAtBottom: boolean = true;
+  showScrollToBottomButton: boolean = false;
+  unreadMessageCount: number = 0;
+
+  // Online status tracking
+  private onlineStatusInterval?: number;
+  private readonly OFFLINE_THRESHOLD = 30000; // 30 seconds
+
   get filteredUsers(): UserInterface[] {
     const term = this.searchTerm.trim().toLowerCase();
     if (!term) return this.users;
@@ -44,10 +58,179 @@ export class ChatComponent implements OnInit, OnDestroy{
     return this.users.find(u => u.id === this.selectedUserId) ?? null;
   }
 
+  // WhatsApp-style date formatting
+  formatDateHeader(date: Date): string {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    const messageDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const diffTime = today.getTime() - messageDate.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) {
+      return 'Today';
+    } else if (diffDays === 1) {
+      return 'Yesterday';
+    } else if (diffDays >= 2 && diffDays <= 7) {
+      return date.toLocaleDateString('en-US', { weekday: 'long' });
+    } else {
+      return date.toLocaleDateString('en-US', { 
+        weekday: 'short', 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    }
+  }
+
+  // Check if we need to show a date header before this message
+  shouldShowDateHeader(currentIndex: number): boolean {
+    if (currentIndex === 0) return true; // Always show for first message
+    
+    const currentMessage = this.messages[currentIndex];
+    const previousMessage = this.messages[currentIndex - 1];
+    
+    if (!currentMessage || !previousMessage) return false;
+    
+    const currentDate = new Date(currentMessage.fullDate.getFullYear(), currentMessage.fullDate.getMonth(), currentMessage.fullDate.getDate());
+    const previousDate = new Date(previousMessage.fullDate.getFullYear(), previousMessage.fullDate.getMonth(), previousMessage.fullDate.getDate());
+    
+    return currentDate.getTime() !== previousDate.getTime();
+  }
+
+  // Handle scroll to update sticky header - WhatsApp style
+  onScroll(event: Event) {
+    const scrollContainer = event.target as HTMLElement;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    
+    // Check if user is at bottom (with small threshold)
+    const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 10;
+    this.isAtBottom = isAtBottom;
+    
+    // Hide scroll button if user is at bottom
+    if (isAtBottom && this.showScrollToBottomButton) {
+      this.showScrollToBottomButton = false;
+      this.unreadMessageCount = 0;
+      this.cdr.detectChanges();
+    }
+    
+    // Find all visible messages
+    const messageElements = scrollContainer.querySelectorAll('[data-message-index]');
+    const visibleMessages: { index: number; date: string }[] = [];
+    
+    for (let i = 0; i < messageElements.length; i++) {
+      const element = messageElements[i] as HTMLElement;
+      const rect = element.getBoundingClientRect();
+      
+      // Check if message is visible in the viewport
+      if (rect.top < containerRect.bottom && rect.bottom > containerRect.top) {
+        const index = parseInt(element.getAttribute('data-message-index') || '0');
+        if (index >= 0 && index < this.messages.length) {
+          const message = this.messages[index];
+          const date = this.formatDateHeader(message.fullDate);
+          visibleMessages.push({ index, date });
+        }
+      }
+    }
+    
+    if (visibleMessages.length === 0) return;
+    
+    // Get unique dates in visible messages
+    const visibleDates = [...new Set(visibleMessages.map(m => m.date))];
+    
+    if (visibleDates.length === 1) {
+      // Only one date visible - hide sticky header
+      if (this.showStickyHeader) {
+        this.showStickyHeader = false;
+        this.cdr.detectChanges();
+      }
+    } else {
+      // Multiple dates visible - show sticky header for the first date
+      const firstDate = visibleDates[0];
+      
+      // Only update if the sticky date has actually changed
+      if (!this.showStickyHeader || this.currentStickyDate !== firstDate) {
+        this.currentStickyDate = firstDate;
+        this.showStickyHeader = true;
+        // Find the index of the first message with this date
+        const firstMessageWithDate = visibleMessages.find(m => m.date === firstDate);
+        this.stickyDateIndex = firstMessageWithDate?.index || 0;
+        this.cdr.detectChanges();
+      }
+    }
+  }
+
+  // Get the current sticky date for display
+  getCurrentStickyDate(): string {
+    return this.currentStickyDate;
+  }
+
+  // Scroll to bottom of chat
+  scrollToBottom() {
+    setTimeout(() => {
+      const chatContainer = document.querySelector('.chat-messages-container') as HTMLElement;
+      if (chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        this.isAtBottom = true;
+        this.showScrollToBottomButton = false;
+        this.unreadMessageCount = 0;
+      }
+    }, 100); // Small delay to ensure DOM is updated
+  }
+
+  // Handle new message received (WhatsApp style)
+  onNewMessageReceived() {
+    if (this.isAtBottom) {
+      // User is at bottom, scroll immediately
+      this.scrollToBottom();
+    } else {
+      // User is reading older messages, show CTA button
+      this.unreadMessageCount++;
+      this.showScrollToBottomButton = true;
+      this.cdr.detectChanges();
+    }
+  }
+
+  // Handle new message sent
+  onNewMessageSent() {
+    // Always scroll when user sends a message
+    this.scrollToBottom();
+  }
+
+  // Check if a message should show a static date header (WhatsApp style)
+  shouldShowStaticDateHeader(currentIndex: number): boolean {
+    // Don't show if this is the first message
+    if (currentIndex === 0) return false;
+    
+    const currentMessage = this.messages[currentIndex];
+    const previousMessage = this.messages[currentIndex - 1];
+    
+    if (!currentMessage || !previousMessage) return false;
+    
+    const currentDate = this.formatDateHeader(currentMessage.fullDate);
+    const previousDate = this.formatDateHeader(previousMessage.fullDate);
+    
+    // Only show static header if dates are different
+    if (currentDate !== previousDate) {
+      // If we have a sticky header showing, only show static header for dates that are NOT sticky
+      if (this.showStickyHeader && this.currentStickyDate) {
+        return currentDate !== this.currentStickyDate;
+      }
+      // If no sticky header, show static header for all date changes
+      return true;
+    }
+    
+    return false;
+  }
+
   ngOnDestroy() {
     if (this.unsubscribeRealtime) this.unsubscribeRealtime();
     if (this.unsubscribePresence) this.unsubscribePresence();
     if (this.stopPresence) this.stopPresence();
+    if (this.onlineStatusInterval) {
+      clearInterval(this.onlineStatusInterval);
+    }
   }
 
   selectUser(user: UserInterface) {
@@ -132,18 +315,87 @@ export class ChatComponent implements OnInit, OnDestroy{
         this.appWrite.getUser().catch(() => null)
       ]);
       const myId = me?.$id ?? null;
+      const now = new Date();
+      
       this.users = docs
         .filter((d: any) => (myId ? d.userId !== myId : true))
-        .map((d: any) => ({
-        id: d.userId,
-        name: d.name || 'User',
-        avatarUrl: d.avatarUrl || 'assets/images/profile.jpeg',
-        lastMessage: '',
-        lastActiveTime: new Date(d.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }));
+        .map((d: any) => {
+          const lastSeen = new Date(d.lastSeen);
+          const timeDiff = now.getTime() - lastSeen.getTime();
+          const isOnline = timeDiff < this.OFFLINE_THRESHOLD;
+          
+          return {
+            id: d.userId,
+            name: d.name || 'User',
+            avatarUrl: d.avatarUrl || 'assets/images/profile.jpeg',
+            lastMessage: '',
+            lastActiveTime: lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            isOnline: isOnline
+          };
+        });
+      
       this.cdr.detectChanges();
+      
+      // Start periodic online status checking
+      this.startOnlineStatusChecking();
     } catch (e) {
       console.error('Failed to load online users', e);
+    }
+  }
+
+  private startOnlineStatusChecking() {
+    // Clear existing interval
+    if (this.onlineStatusInterval) {
+      clearInterval(this.onlineStatusInterval);
+    }
+    
+    // Check online status every 10 seconds
+    this.onlineStatusInterval = window.setInterval(() => {
+      this.updateOnlineStatus();
+    }, 10000);
+  }
+
+  private updateOnlineStatus() {
+    const now = new Date();
+    let hasChanges = false;
+    
+    this.users.forEach(user => {
+      const wasOnline = user.isOnline;
+      
+      // Check if user should be considered offline
+      // This is a simplified check - in production you'd have more sophisticated logic
+      // For now, we'll simulate offline detection by checking if the user is still in the online users list
+      this.checkUserOnlineStatus(user).then(isOnline => {
+        if (user.isOnline !== isOnline) {
+          user.isOnline = isOnline;
+          hasChanges = true;
+        }
+      });
+    });
+    
+    if (hasChanges) {
+      this.cdr.detectChanges();
+    }
+  }
+
+  private async checkUserOnlineStatus(user: UserInterface): Promise<boolean> {
+    try {
+      // In a real implementation, you'd check the user's last activity
+      // For now, we'll simulate by checking if they're still in the recent online users
+      const docs = await this.appWrite.listOnlineUsers(60);
+      const userDoc = docs.find((d: any) => d.userId === user.id);
+      
+      if (!userDoc) {
+        return false; // User not in online list, consider offline
+      }
+      
+      // Check if last seen is within threshold
+      const lastSeen = new Date(userDoc.lastSeen);
+      const timeDiff = new Date().getTime() - lastSeen.getTime();
+      return timeDiff < this.OFFLINE_THRESHOLD;
+    } catch (e) {
+      console.error('Failed to check user online status', e);
+      return user.isOnline; // Keep current status on error
     }
   }
 
@@ -167,10 +419,14 @@ export class ChatComponent implements OnInit, OnDestroy{
       type: 'text',
       data: text,
       dateTime: localTime,
+      fullDate: now,
       isSentByMe: true,
       senderId: myId
     });
     this.message = '';
+    
+    // Handle new message sent
+    this.onNewMessageSent();
 
     try {
       const created = await this.appWrite.createTextMessage({
@@ -210,16 +466,28 @@ export class ChatComponent implements OnInit, OnDestroy{
       const docs = await this.appWrite.listMessages(this.selectedUserId, myId || undefined);
       this.messages = docs.map((d: any) => {
         const isAudio = d.type === 'audio';
+        const sentDate = new Date(d.sentAt);
         return {
           id: d.$id,
           type: isAudio ? 'audio' : 'text',
           data: isAudio ? d.url : d.text,
-          dateTime: new Date(d.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          dateTime: sentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          fullDate: sentDate,
           isSentByMe: myId ? d.senderId === myId : false,
           senderId: d.senderId
         } as MessageInterface;
       });
+      
+      // Initialize sticky header with first message
+      if (this.messages.length > 0) {
+        this.currentStickyDate = this.formatDateHeader(this.messages[0].fullDate);
+        this.showStickyHeader = true;
+      }
+      
       this.cdr.detectChanges();
+      
+      // Scroll to bottom when messages are loaded
+      this.scrollToBottom();
 
       // subscribe after initial load to avoid duplicating loaded docs
       if (myId) {
@@ -230,15 +498,20 @@ export class ChatComponent implements OnInit, OnDestroy{
           const myId2 = me?.$id ?? null;
           const isAudio = doc.type === 'audio';
           const payload = isAudio ? doc.url : doc.text;
+          const sentDate = new Date(doc.sentAt);
           this.messages.push({
             id: doc.$id,
             type: isAudio ? 'audio' : 'text',
             data: payload,
-            dateTime: new Date(doc.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            dateTime: sentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            fullDate: sentDate,
             isSentByMe: myId2 ? doc.senderId === myId2 : false,
             senderId: doc.senderId
           });
           this.cdr.detectChanges();
+          
+          // Handle new message received (WhatsApp style)
+          this.onNewMessageReceived();
         });
       }
     } catch (e) {
@@ -266,10 +539,14 @@ export class ChatComponent implements OnInit, OnDestroy{
       type: 'audio',
       data: audioDataUrl,
       dateTime: localTime,
+      fullDate: now,
       isSentByMe: true,
       senderId: myId
     });
     this.cdr.detectChanges();
+    
+    // Handle new message sent
+    this.onNewMessageSent();
 
     try {
       // Convert local blob URL to Blob

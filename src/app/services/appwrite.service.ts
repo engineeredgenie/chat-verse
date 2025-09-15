@@ -47,6 +47,105 @@ export class AppwriteService {
     return await this.account.get();
   }
 
+  async ensureUserNameAndId(name: string, userId: string) {
+    const me = await this.account.get();
+    const currentPrefs = (me as any).prefs || {};
+    
+    // Check if userId is already taken by another user
+    const existingUser = await this.findUserByCustomId(userId);
+    if (existingUser) {
+      throw new Error('User ID is already taken. Please choose a different one.');
+    }
+    
+    const updatedPrefs = { ...currentPrefs, userId };
+    
+    // Update both name and prefs
+    await this.account.updateName(name);
+    await this.account.updatePrefs(updatedPrefs);
+    
+    // Immediately upsert presence with the new custom userId so downstream queries work
+    try {
+      await this.upsertPresenceDocument({
+        appwriteUserId: me.$id,
+        userId,
+        name,
+        avatarUrl: (currentPrefs as any)?.avatarUrl || ''
+      });
+    } catch {}
+
+    return await this.account.get();
+  }
+
+  async findUserByCustomId(userId: string) {
+    if (!environment.appwritePresenceCollectionId) return null;
+    try {
+      // Prefer direct get by document id == userId for uniqueness
+      const doc = await (this.databases as any).getDocument(
+        environment.appwriteDatabaseId,
+        environment.appwritePresenceCollectionId,
+        userId
+      );
+      return doc || null;
+    } catch {
+      // fallback to query by field if doc id lookup fails
+      try {
+        const result = await this.databases.listDocuments(
+          environment.appwriteDatabaseId,
+          environment.appwritePresenceCollectionId,
+          [Query.equal('userId', userId)]
+        );
+        return result.documents[0] || null;
+      } catch (e) {
+        console.error('Failed to find user by custom ID', e);
+        return null;
+      }
+    }
+  }
+
+  private async upsertPresenceDocument(payload: { appwriteUserId: string; userId: string; name: string; avatarUrl?: string }) {
+    if (!environment.appwritePresenceCollectionId) return;
+    const body = {
+      userId: payload.userId,
+      name: payload.name || 'User',
+      avatarUrl: payload.avatarUrl || '',
+      status: 'online',
+      lastSeen: new Date().toISOString()
+    } as any;
+    try {
+      // Check existence first to avoid update-only 404
+      let exists = false;
+      try {
+        await (this.databases as any).getDocument(
+          environment.appwriteDatabaseId,
+          environment.appwritePresenceCollectionId,
+          payload.userId
+        );
+        exists = true;
+      } catch {}
+
+      if (exists) {
+        await this.databases.updateDocument(
+          environment.appwriteDatabaseId,
+          environment.appwritePresenceCollectionId,
+          payload.userId,
+          body
+        );
+      } else {
+        await this.databases.createDocument(
+          environment.appwriteDatabaseId,
+          environment.appwritePresenceCollectionId,
+          payload.userId,
+          body,
+          [
+            Permission.read(Role.any()),
+            Permission.update(Role.user(payload.appwriteUserId)),
+            Permission.delete(Role.user(payload.appwriteUserId))
+          ]
+        );
+      }
+    } catch {}
+  }
+
   async createTextMessage(params: {
     chatId: string;
     senderId: string;
@@ -108,6 +207,7 @@ export class AppwriteService {
   }
 
   async listMessages(chatIdA: string, chatIdB?: string, limit: number = 50) {
+    // chatId represents the recipient's userId; we now store senderId as sender's userId
     const chatIds = chatIdB ? [chatIdA, chatIdB] : [chatIdA];
     const result = await this.databases.listDocuments(
       environment.appwriteDatabaseId,
@@ -115,6 +215,22 @@ export class AppwriteService {
       [
         Query.equal('chatId', chatIds),
         Query.orderAsc('sentAt'),
+        Query.limit(limit)
+      ]
+    );
+    return result.documents;
+  }
+
+  async listAllMessages(userId: string, limit: number = 1000) {
+    const result = await this.databases.listDocuments(
+      environment.appwriteDatabaseId,
+      environment.appwriteMessagesCollectionId,
+      [
+        Query.or([
+          Query.equal('chatId', userId),
+          Query.equal('senderId', userId)
+        ]),
+        Query.orderDesc('sentAt'),
         Query.limit(limit)
       ]
     );
@@ -154,38 +270,21 @@ export class AppwriteService {
       return () => {};
     }
     const me = await this.account.get();
-    const userId = me.$id;
+    const appwriteUserId = me.$id;
+    const customUserId = (me as any).prefs?.userId;
+
+    if (!customUserId) {
+      console.warn('Custom userId not found. Presence heartbeat skipped.');
+      return () => {};
+    }
 
     const ensureDoc = async () => {
-      const payload = {
-        userId,
+      await this.upsertPresenceDocument({
+        appwriteUserId,
+        userId: customUserId,
         name: (me as any).name || 'User',
-        avatarUrl: (me as any).prefs?.avatarUrl || '',
-        status: 'online',
-        lastSeen: new Date().toISOString()
-      };
-      try {
-        try {
-          // Try update (assuming doc id == userId)
-          await this.databases.updateDocument(
-            environment.appwriteDatabaseId,
-            environment.appwritePresenceCollectionId,
-            userId,
-            payload
-          );
-        } catch {
-          // Create if not exists
-          await this.databases.createDocument(
-            environment.appwriteDatabaseId,
-            environment.appwritePresenceCollectionId,
-            userId,
-            payload
-          );
-        }
-      } catch (e) {
-        // Swallow errors (e.g., 404 when collection not created yet)
-        // Optional: console.debug('Presence upsert skipped:', e);
-      }
+        avatarUrl: (me as any).prefs?.avatarUrl || ''
+      });
     };
 
     try { await ensureDoc(); } catch {}
@@ -199,10 +298,14 @@ export class AppwriteService {
     if (!environment.appwritePresenceCollectionId) return;
     try {
       const me = await this.account.get();
+      const customUserId = (me as any).prefs?.userId;
+      
+      if (!customUserId) return;
+      
       await this.databases.updateDocument(
         environment.appwriteDatabaseId,
         environment.appwritePresenceCollectionId,
-        me.$id,
+        customUserId,
         { status: 'offline', lastSeen: new Date().toISOString() }
       );
     } catch {}
@@ -232,5 +335,188 @@ export class AppwriteService {
     });
     this.activeUnsubscribes.push(unsubscribe);
     return () => { try { unsubscribe(); } catch {} };
+  }
+
+  /**
+   * Global messages subscription: notify on any new message created.
+   */
+  subscribeToAllMessages(handler: (doc: any) => void): () => void {
+    const channel = `databases.${environment.appwriteDatabaseId}.collections.${environment.appwriteMessagesCollectionId}.documents`;
+    const unsubscribe = this.client.subscribe(channel, (event: any) => {
+      const isCreate = Array.isArray(event.events)
+        ? event.events.some((e: string) => e.endsWith('.create'))
+        : false;
+      const document = event?.payload;
+      if (!document || !isCreate) return;
+      handler(document);
+    });
+    this.activeUnsubscribes.push(unsubscribe);
+    return () => { try { unsubscribe(); } catch {} };
+  }
+  // Friend System Methods
+  async sendFriendRequest(addresseeUserId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    
+    const me = await this.account.get();
+    const myUserId = (me as any).prefs?.userId;
+    
+    if (!myUserId) {
+      throw new Error('User ID not found. Please complete your profile first.');
+    }
+    
+    if (addresseeUserId === myUserId) {
+      throw new Error('You cannot send a friend request to yourself');
+    }
+
+    // Validate target exists in presence/users
+    const target = await this.findUserByCustomId(addresseeUserId);
+    if (!target) {
+      throw new Error('No user found with that User ID');
+    }
+
+    // Check if friendship already exists
+    const existingFriendship = await this.getFriendship(myUserId, addresseeUserId);
+    if (existingFriendship) {
+      throw new Error('Friendship request already exists or users are already friends');
+    }
+    
+    return await this.databases.createDocument(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      ID.unique(),
+      {
+        requesterId: myUserId,
+        addresseeId: addresseeUserId,
+        status: 'pending',
+        requestedAt: new Date().toISOString()
+      }
+    );
+  }
+
+  async acceptFriendRequest(friendshipId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    
+    return await this.databases.updateDocument(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      friendshipId,
+      {
+        status: 'accepted',
+        acceptedAt: new Date().toISOString()
+      }
+    );
+  }
+
+  async declineFriendRequest(friendshipId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    
+    return await this.databases.updateDocument(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      friendshipId,
+      {
+        status: 'declined'
+      }
+    );
+  }
+
+  async getFriendship(requesterId: string, addresseeId: string) {
+    if (!environment.appwriteFriendsCollectionId) return null;
+    
+    try {
+      const result = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        [
+          Query.or([
+            Query.and([
+              Query.equal('requesterId', requesterId),
+              Query.equal('addresseeId', addresseeId)
+            ]),
+            Query.and([
+              Query.equal('requesterId', addresseeId),
+              Query.equal('addresseeId', requesterId)
+            ])
+          ])
+        ]
+      );
+      return result.documents[0] || null;
+    } catch (e) {
+      console.error('Failed to get friendship', e);
+      return null;
+    }
+  }
+
+  async getFriends(userId: string) {
+    if (!environment.appwriteFriendsCollectionId) return [];
+    
+    try {
+      const result = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        [
+          Query.or([
+            Query.and([
+              Query.equal('requesterId', userId),
+              Query.equal('status', 'accepted')
+            ]),
+            Query.and([
+              Query.equal('addresseeId', userId),
+              Query.equal('status', 'accepted')
+            ])
+          ])
+        ]
+      );
+      
+      // Extract friend user IDs
+      const friendUserIds = result.documents.map((doc: any) => 
+        doc.requesterId === userId ? doc.addresseeId : doc.requesterId
+      );
+      
+      return friendUserIds;
+    } catch (e) {
+      console.error('Failed to get friends', e);
+      return [];
+    }
+  }
+
+  async getPendingFriendRequests(userId: string) {
+    if (!environment.appwriteFriendsCollectionId) return [];
+    
+    try {
+      const result = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        [
+          Query.and([
+            Query.equal('addresseeId', userId),
+            Query.equal('status', 'pending')
+          ])
+        ]
+      );
+      
+      return result.documents;
+    } catch (e) {
+      console.error('Failed to get pending friend requests', e);
+      return [];
+    }
+  }
+
+  async removeFriend(friendshipId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    
+    return await this.databases.deleteDocument(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      friendshipId
+    );
   }
 }

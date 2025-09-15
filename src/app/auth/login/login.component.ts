@@ -16,7 +16,7 @@ import {NgClass} from '@angular/common';
 export class LoginComponent {
   isSigningIn: boolean = false;
   magicLinkSent: boolean = false;
-  email: string = 'engineeredgenie@gmail.com';
+  email: string = '';
   signInBtnLabel: string = 'SIGN IN';
 
   constructor(private appWrite: AppwriteService) {

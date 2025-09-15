@@ -4,6 +4,7 @@ export const environment = {
   appwriteProjectId: '680cb95e00346ae02841',
   appwriteDatabaseId: '68c3bf4a001ee9410ea0',
   appwriteMessagesCollectionId: 'messages',
-  appwritePresenceCollectionId: 'onlineUsers',
+  appwritePresenceCollectionId: 'onlineusers',
+  appwriteFriendsCollectionId: 'friendships',
   appwriteBucketId: 'verse-files'
 };

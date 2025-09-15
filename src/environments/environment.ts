@@ -5,5 +5,6 @@ export const environment = {
   appwriteDatabaseId: '',
   appwriteMessagesCollectionId: '',
   appwritePresenceCollectionId: '',
+  appwriteFriendsCollectionId: '',
   appwriteBucketId: ''
 };

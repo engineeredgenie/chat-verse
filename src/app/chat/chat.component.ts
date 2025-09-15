@@ -2,14 +2,14 @@ import {ChangeDetectorRef, Component, OnDestroy, OnInit} from '@angular/core';
 import Swal from 'sweetalert2';
 import {AudioPlayerComponent} from '../audio-player/audio-player.component';
 import {FormsModule} from '@angular/forms';
-import {NgClass} from '@angular/common';
+import {NgClass, DatePipe} from '@angular/common';
 import { MessageInterface, UserInterface } from '../interfaces';
 import {AppwriteService} from '../services/appwrite.service';
 import { HeaderComponent } from "../header/header.component";
 
 @Component({
   selector: 'app-chat',
-  imports: [AudioPlayerComponent, FormsModule, NgClass, HeaderComponent],
+  imports: [AudioPlayerComponent, FormsModule, NgClass, HeaderComponent, DatePipe],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.scss'
 })
@@ -28,6 +28,7 @@ export class ChatComponent implements OnInit, OnDestroy{
   users: UserInterface[] = [];
   private stopPresence?: () => void;
   private unsubscribePresence?: () => void;
+  private unsubscribeGlobalMessages?: () => void;
 
   // Sticky date header
   currentStickyDate: string = '';
@@ -41,7 +42,11 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   // Online status tracking
   private onlineStatusInterval?: number;
-  private readonly OFFLINE_THRESHOLD = 30000; // 30 seconds
+  private readonly OFFLINE_THRESHOLD = 5; // 5 seconds
+
+  // Friends UI state
+  isRequestsOpen: boolean = false;
+  pendingRequests: Array<{ $id: string; requesterId: string; requestedAt?: string }> = [];
 
   get filteredUsers(): UserInterface[] {
     const term = this.searchTerm.trim().toLowerCase();
@@ -227,6 +232,7 @@ export class ChatComponent implements OnInit, OnDestroy{
   ngOnDestroy() {
     if (this.unsubscribeRealtime) this.unsubscribeRealtime();
     if (this.unsubscribePresence) this.unsubscribePresence();
+    if (this.unsubscribeGlobalMessages) this.unsubscribeGlobalMessages();
     if (this.stopPresence) this.stopPresence();
     if (this.onlineStatusInterval) {
       clearInterval(this.onlineStatusInterval);
@@ -235,6 +241,9 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   selectUser(user: UserInterface) {
     this.selectedUserId = user.id;
+    // Reset unread count when opening a chat
+    const idx = this.users.findIndex(u => u.id === user.id);
+    if (idx !== -1) this.users[idx].unreadCount = 0;
     this.loadMessagesForSelectedUser();
   }
 
@@ -245,27 +254,60 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   ngOnInit() {
     this.appWrite.getUser().then(async (user) => {
-      // Ensure user has a name before connecting to realtime/presence
+      // Ensure user has a name and userId before connecting to realtime/presence
       let displayName = (user as any).name;
-      if (!displayName || displayName.trim().length === 0) {
+      let userCustomId = (user as any).prefs?.userId;
+      
+      if (!displayName || displayName.trim().length === 0 || !userCustomId) {
         const result = await Swal.fire({
-          title: 'Set your name',
-          input: 'text',
-          inputLabel: 'Please enter a display name',
-          inputPlaceholder: 'Your name',
+          title: 'Complete Your Profile',
+          html: `
+            <div style="text-align: left;">
+              <label for="swal-input1" style="display: block; margin-bottom: 5px; font-weight: bold;">Display Name:</label>
+              <input id="swal-input1" class="swal2-input" placeholder="Your name" value="${displayName || ''}">
+              
+              <label for="swal-input2" style="display: block; margin: 15px 0 5px 0; font-weight: bold;">User ID:</label>
+              <input id="swal-input2" class="swal2-input" placeholder="Your unique user ID" value="${userCustomId || ''}">
+              <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
+                This will be your unique identifier for friends to find you
+              </small>
+            </div>
+          `,
           allowOutsideClick: false,
           allowEscapeKey: false,
-          inputValidator: (value: string) => {
-            if (!value || value.trim().length < 2) {
-              return 'Please enter at least 2 characters';
+          preConfirm: () => {
+            const nameInput = document.getElementById('swal-input1') as HTMLInputElement;
+            const userIdInput = document.getElementById('swal-input2') as HTMLInputElement;
+            
+            const name = nameInput?.value?.trim();
+            const userId = userIdInput?.value?.trim();
+            
+            if (!name || name.length < 2) {
+              Swal.showValidationMessage('Please enter at least 2 characters for your name');
+              return false;
             }
-            return undefined;
+            
+            if (!userId || userId.length < 3) {
+              Swal.showValidationMessage('Please enter at least 3 characters for your User ID');
+              return false;
+            }
+            
+            // Check for valid characters (alphanumeric and underscore only)
+            if (!/^[a-zA-Z0-9_]+$/.test(userId)) {
+              Swal.showValidationMessage('User ID can only contain letters, numbers, and underscores');
+              return false;
+            }
+            
+            return { name, userId };
           },
-          confirmButtonText: 'Save'
+          confirmButtonText: 'Save Profile'
         });
+        
         if (result.isConfirmed && result.value) {
-          const updated = await this.appWrite.ensureUserName(result.value.trim());
+          const { name, userId } = result.value;
+          const updated = await this.appWrite.ensureUserNameAndId(name, userId);
           displayName = (updated as any).name;
+          userCustomId = (updated as any).prefs?.userId;
         }
       }
       // Start presence heartbeat and initial load (no-op if not configured)
@@ -275,6 +317,18 @@ export class ChatComponent implements OnInit, OnDestroy{
       this.unsubscribePresence = this.appWrite.subscribeToPresence(() => {
         this.loadOnlineUsers();
       });
+      // Global message subscription to keep chat list lastMessage fresh even when chat not active
+      this.unsubscribeGlobalMessages = this.appWrite.subscribeToAllMessages(async (doc: any) => {
+        const meNow = await this.appWrite.getUser().catch(() => null);
+        const myCustom = (meNow as any)?.prefs?.userId;
+        if (!myCustom) return;
+        // Only consider messages where I'm a participant
+        if (!(doc.chatId === myCustom || doc.senderId === myCustom)) return;
+        this.updateUserListWithNewMessage(doc, myCustom);
+        this.cdr.detectChanges();
+      });
+      // Preload pending requests badge
+      await this.refreshPendingRequests();
     })
   }
 
@@ -315,24 +369,43 @@ export class ChatComponent implements OnInit, OnDestroy{
         this.appWrite.getUser().catch(() => null)
       ]);
       const myId = me?.$id ?? null;
+      const myCustomUserId = (me as any).prefs?.userId;
       const now = new Date();
       
-      this.users = docs
-        .filter((d: any) => (myId ? d.userId !== myId : true))
+      if (!myCustomUserId) {
+        console.warn('Custom userId not found. Cannot load friends.');
+        return;
+      }
+      
+      // Get friends list
+      const friendUserIds = await this.appWrite.getFriends(myCustomUserId);
+      
+      // Get all users from presence (online and recent offline) and filter to friends only
+      const allUsers = docs
+        .filter((d: any) => {
+          // Filter out self and only include friends
+          return d.userId !== myCustomUserId && friendUserIds.includes(d.userId);
+        })
         .map((d: any) => {
           const lastSeen = new Date(d.lastSeen);
           const timeDiff = now.getTime() - lastSeen.getTime();
           const isOnline = timeDiff < this.OFFLINE_THRESHOLD;
           
           return {
-            id: d.userId,
+            id: d.appwriteUserId || d.userId, // Use Appwrite account ID for chat compatibility
+            userId: d.userId, // Custom userId
             name: d.name || 'User',
             avatarUrl: d.avatarUrl || 'assets/images/profile.jpeg',
             lastMessage: '',
             lastActiveTime: lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            isOnline: isOnline
+            isOnline: isOnline,
+            lastMessageTimestamp: undefined
           };
         });
+
+      // Load past chats and get last messages for sorting
+      await this.loadPastChatsAndSort(allUsers, myId);
+      // Ensure global subscription keeps lastMessage fresh; avoid stale overwrites
       
       this.cdr.detectChanges();
       
@@ -340,6 +413,82 @@ export class ChatComponent implements OnInit, OnDestroy{
       this.startOnlineStatusChecking();
     } catch (e) {
       console.error('Failed to load online users', e);
+    }
+  }
+
+  private async loadPastChatsAndSort(users: UserInterface[], myId: string | null) {
+    if (!myId) {
+      this.users = users;
+      return;
+    }
+
+    try {
+      // Get all unique chat partners from messages
+      const allMessages = await this.appWrite.listAllMessages(myId);
+      const chatPartners = new Map<string, { lastMessage: string; lastMessageTimestamp: Date }>();
+
+      // Process messages to find last message for each chat partner
+      allMessages.forEach((msg: any) => {
+        const chatId = msg.chatId;
+        const sentAt = new Date(msg.sentAt);
+        
+        if (!chatPartners.has(chatId) || chatPartners.get(chatId)!.lastMessageTimestamp < sentAt) {
+          chatPartners.set(chatId, {
+            lastMessage: msg.type === 'audio' ? 'Audio message' : msg.text || '',
+            lastMessageTimestamp: sentAt
+          });
+        }
+      });
+
+      // Update users with last message info
+      const updatedUsers = users.map(user => {
+        const chatInfo = chatPartners.get(user.id);
+        if (chatInfo) {
+          return {
+            ...user,
+            lastMessage: chatInfo.lastMessage,
+            lastMessageTimestamp: chatInfo.lastMessageTimestamp
+          };
+        }
+        return user;
+      });
+
+      // Add users who have chat history but aren't in presence (only if they're friends)
+      const me = await this.appWrite.getUser().catch(() => null);
+      const myCustomUserId = (me as any).prefs?.userId;
+      
+      if (myCustomUserId) {
+        const friendUserIds = await this.appWrite.getFriends(myCustomUserId);
+        
+        chatPartners.forEach((chatInfo, appwriteUserId) => {
+          if (!users.find(u => u.id === appwriteUserId)) {
+            // Check if this user is a friend by looking up their custom userId
+            // For now, we'll skip adding offline users without presence data
+            // In a full implementation, you'd need to store the mapping between appwriteUserId and customUserId
+          }
+        });
+      }
+
+      // Sort by last message timestamp (most recent first), then by online status
+      this.users = updatedUsers.sort((a, b) => {
+        // Online users first
+        if (a.isOnline && !b.isOnline) return -1;
+        if (!a.isOnline && b.isOnline) return 1;
+        
+        // Then by last message timestamp
+        if (a.lastMessageTimestamp && b.lastMessageTimestamp) {
+          return b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime();
+        }
+        if (a.lastMessageTimestamp && !b.lastMessageTimestamp) return -1;
+        if (!a.lastMessageTimestamp && b.lastMessageTimestamp) return 1;
+        
+        // Finally by name
+        return a.name.localeCompare(b.name);
+      });
+
+    } catch (e) {
+      console.error('Failed to load past chats', e);
+      this.users = users;
     }
   }
 
@@ -413,7 +562,7 @@ export class ChatComponent implements OnInit, OnDestroy{
     // Optimistic UI update
     const tempId = 'temp-' + now.getTime();
     const currentUser = await this.appWrite.getUser().catch(() => null);
-    const myId = currentUser?.$id ?? 'anonymous';
+    const myId = (currentUser as any)?.prefs?.userId ?? 'anonymous';
     this.messages.push({
       id: tempId,
       type: 'text',
@@ -424,6 +573,9 @@ export class ChatComponent implements OnInit, OnDestroy{
       senderId: myId
     });
     this.message = '';
+    
+    // Update user list optimistically
+    this.updateUserListOptimistically(this.selectedUserId, text, now);
     
     // Handle new message sent
     this.onNewMessageSent();
@@ -441,7 +593,7 @@ export class ChatComponent implements OnInit, OnDestroy{
       if (idx !== -1) {
         this.messages[idx].id = created.$id;
       }
-      // Realtime delivery handled by Appwrite subscription
+      // Prevent duplicate when realtime arrives: we already guard above by id check
     } catch (err) {
       console.error('Failed to persist message to Appwrite', err);
       // Optionally revert optimistic update
@@ -460,7 +612,7 @@ export class ChatComponent implements OnInit, OnDestroy{
         this.appWrite.getUser().catch(() => null)
       ]);
 
-      const myId = currentUser?.$id ?? null;
+      const myId = (currentUser as any)?.prefs?.userId ?? null;
 
       // Load both directions: messages where chatId is either me or selected user
       const docs = await this.appWrite.listMessages(this.selectedUserId, myId || undefined);
@@ -493,12 +645,36 @@ export class ChatComponent implements OnInit, OnDestroy{
       if (myId) {
         this.unsubscribeRealtime = this.appWrite.subscribeToConversation(this.selectedUserId, myId, async (doc: any) => {
           // Ignore duplicates for messages we just optimistically added: if exists by id, skip
+          // Deduplicate: ignore if a message with same id already exists
           if (this.messages.some(m => m.id === doc.$id)) return;
           const me = await this.appWrite.getUser().catch(() => null);
-          const myId2 = me?.$id ?? null;
+          const myId2 = (me as any)?.prefs?.userId ?? null;
           const isAudio = doc.type === 'audio';
           const payload = isAudio ? doc.url : doc.text;
           const sentDate = new Date(doc.sentAt);
+
+          // 1) If this is my own message, merge with the optimistic temp one
+          if (myId2 && doc.senderId === myId2) {
+            const tempIndex = this.messages.findIndex(m => m.id.startsWith('temp-') && m.isSentByMe === true);
+            if (tempIndex !== -1) {
+              this.messages[tempIndex].id = doc.$id;
+              this.messages[tempIndex].data = payload;
+              this.messages[tempIndex].fullDate = sentDate;
+              this.messages[tempIndex].dateTime = sentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              this.cdr.detectChanges();
+              // Update user list to reflect new message and re-sort
+              this.updateUserListWithNewMessage(doc, myId2);
+              // Handle new message received (WhatsApp style)
+              this.onNewMessageReceived();
+              return;
+            }
+          }
+
+          // 2) If a message with same sender and timestamp already exists, skip (network race)
+          if (this.messages.some(m => m.senderId === doc.senderId && Math.abs(m.fullDate.getTime() - sentDate.getTime()) < 1000 && m.data === payload)) {
+            return;
+          }
+
           this.messages.push({
             id: doc.$id,
             type: isAudio ? 'audio' : 'text',
@@ -509,6 +685,9 @@ export class ChatComponent implements OnInit, OnDestroy{
             senderId: doc.senderId
           });
           this.cdr.detectChanges();
+          
+          // Update user list to reflect new message and re-sort
+          this.updateUserListWithNewMessage(doc, myId2);
           
           // Handle new message received (WhatsApp style)
           this.onNewMessageReceived();
@@ -530,7 +709,7 @@ export class ChatComponent implements OnInit, OnDestroy{
     const now = new Date();
     const localTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const currentUser = await this.appWrite.getUser().catch(() => null);
-    const myId = currentUser?.$id ?? 'anonymous';
+    const myId = (currentUser as any)?.prefs?.userId ?? 'anonymous';
 
     // Optimistic UI: show local blob URL
     const tempId = 'temp-audio-' + now.getTime();
@@ -544,6 +723,9 @@ export class ChatComponent implements OnInit, OnDestroy{
       senderId: myId
     });
     this.cdr.detectChanges();
+    
+    // Update user list optimistically
+    this.updateUserListOptimistically(this.selectedUserId ?? 'default', 'Audio message', now);
     
     // Handle new message sent
     this.onNewMessageSent();
@@ -566,6 +748,173 @@ export class ChatComponent implements OnInit, OnDestroy{
       }
     } catch (e) {
       console.error('Failed to upload audio message', e);
+    }
+  }
+
+  onFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) {
+      return;
+    }
+    const file = input.files[0];
+    const allowedExtensions = [
+      'doc', 'docx', 'xls', 'xlsx', 'pdf',
+      'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'tiff'
+    ];
+    const fileExtension = file.name.split('.').pop()?.toLowerCase();
+    if (!fileExtension || !allowedExtensions.includes(fileExtension)) {
+      alert('Invalid file type!');
+      return;
+    }
+    // TODO: Handle file upload logic here
+    console.log('Selected file:', file);
+  }
+
+  private updateUserListOptimistically(chatId: string, messageText: string, timestamp: Date) {
+    const userIndex = this.users.findIndex(u => u.id === chatId);
+    if (userIndex !== -1) {
+      this.users[userIndex].lastMessage = messageText;
+      this.users[userIndex].lastMessageTimestamp = timestamp;
+      this.users[userIndex].lastActiveTime = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      // Re-sort the users array
+      this.sortUsers();
+      this.cdr.detectChanges();
+    }
+  }
+
+  private updateUserListWithNewMessage(doc: any, myId: string | null) {
+    if (!myId) return;
+    
+    const chatId = doc.chatId === myId ? doc.senderId : doc.chatId;
+    const messageText = doc.type === 'audio' ? 'Audio message' : doc.text || '';
+    const timestamp = new Date(doc.sentAt);
+    
+    const userIndex = this.users.findIndex(u => u.id === chatId);
+    if (userIndex !== -1) {
+      this.users[userIndex].lastMessage = messageText;
+      this.users[userIndex].lastMessageTimestamp = timestamp;
+      this.users[userIndex].lastActiveTime = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // Increment unread count if this chat is not currently active and message is not mine
+      if (this.selectedUserId !== chatId && doc.senderId !== myId) {
+        const current = this.users[userIndex].unreadCount || 0;
+        this.users[userIndex].unreadCount = current + 1;
+      }
+    } else {
+      // Add new user if they don't exist in the list
+      this.users.push({
+        id: chatId,
+        userId: chatId, // For new users, we'll use the chatId as userId for now
+        name: 'User', // We don't have name info for new users
+        avatarUrl: 'assets/images/profile.jpeg',
+        lastMessage: messageText,
+        lastActiveTime: timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isOnline: false,
+        lastMessageTimestamp: timestamp,
+        unreadCount: (this.selectedUserId !== chatId && doc.senderId !== myId) ? 1 : 0
+      });
+    }
+    
+    // Re-sort the users array
+    this.sortUsers();
+    this.cdr.detectChanges();
+  }
+
+  private sortUsers() {
+    this.users.sort((a, b) => {
+      // Online users first
+      if (a.isOnline && !b.isOnline) return -1;
+      if (!a.isOnline && b.isOnline) return 1;
+      
+      // Then by last message timestamp
+      if (a.lastMessageTimestamp && b.lastMessageTimestamp) {
+        return b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime();
+      }
+      if (a.lastMessageTimestamp && !b.lastMessageTimestamp) return -1;
+      if (!a.lastMessageTimestamp && b.lastMessageTimestamp) return 1;
+      
+      // Finally by name
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  // Friend Management Methods
+  async addFriend() {
+    const result = await Swal.fire({
+      title: 'Add Friend',
+      input: 'text',
+      inputLabel: 'Enter your friend\'s User ID',
+      inputPlaceholder: 'e.g., john_doe123',
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      inputValidator: (value: string) => {
+        if (!value || value.trim().length < 3) {
+          return 'Please enter at least 3 characters';
+        }
+        if (!/^[a-zA-Z0-9_]+$/.test(value)) {
+          return 'User ID can only contain letters, numbers, and underscores';
+        }
+        return undefined;
+      },
+      confirmButtonText: 'Send Request'
+    });
+
+    if (result.isConfirmed && result.value) {
+      try {
+        await this.appWrite.sendFriendRequest(result.value.trim());
+        Swal.fire({
+          title: 'Success!',
+          text: 'Friend request sent successfully!',
+          icon: 'success',
+          timer: 2000
+        });
+      } catch (error: any) {
+        Swal.fire({
+          title: 'Error',
+          text: error.message || 'Failed to send friend request',
+          icon: 'error'
+        });
+      }
+    }
+  }
+
+  async showFriendRequests() {
+    // Toggle slide-over panel
+    this.isRequestsOpen = !this.isRequestsOpen;
+    if (this.isRequestsOpen) {
+      await this.refreshPendingRequests();
+      this.cdr.detectChanges();
+    }
+  }
+
+  private async refreshPendingRequests() {
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomUserId = (me as any).prefs?.userId;
+    if (!myCustomUserId) return;
+    const pending = await this.appWrite.getPendingFriendRequests(myCustomUserId);
+    this.pendingRequests = pending.map((p: any) => ({ $id: p.$id, requesterId: p.requesterId, requestedAt: p.requestedAt }));
+  }
+
+  async acceptRequest(reqId: string) {
+    try {
+      await this.appWrite.acceptFriendRequest(reqId);
+      await this.refreshPendingRequests();
+      await this.loadOnlineUsers();
+      this.cdr.detectChanges();
+      Swal.fire({ title: 'Friend added!', icon: 'success', timer: 1200, showConfirmButton: false });
+    } catch (e: any) {
+      Swal.fire({ title: 'Error', text: e.message || 'Failed to accept request', icon: 'error' });
+    }
+  }
+
+  async declineRequest(reqId: string) {
+    try {
+      await this.appWrite.declineFriendRequest(reqId);
+      await this.refreshPendingRequests();
+      this.cdr.detectChanges();
+      Swal.fire({ title: 'Request declined', icon: 'info', timer: 1000, showConfirmButton: false });
+    } catch (e: any) {
+      Swal.fire({ title: 'Error', text: e.message || 'Failed to decline request', icon: 'error' });
     }
   }
 }

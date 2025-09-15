@@ -37,19 +37,37 @@
           </svg>
         </div>
 
-        <!-- Online Users -->
+        <!-- Chat List -->
         <div class="flex flex-col flex-1 gap-2 ct-bg-light rounded-xl overflow-y-auto">
-          <span class="font-semibold  pl-4 pt-4">Online users</span>
+          <div class="flex justify-between items-center pl-4 pr-4 pt-4">
+            <span class="font-semibold">Chats</span>
+            <div class="flex gap-2 items-center">
+              <button (click)="addFriend()" class="text-xs bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-1 rounded-md transition-colors">
+                Add Friend
+              </button>
+              <button (click)="showFriendRequests()" class="relative text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded-md transition-colors">
+                Requests
+                @if (pendingRequests.length > 0) {
+                  <span class="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full">{{ pendingRequests.length }}</span>
+                }
+              </button>
+            </div>
+          </div>
           <div class="flex flex-col gap-2 py-2 px-1 ct-bg-light rounded-xl">
             @for (user of filteredUsers; track user.id) {
               <div (click)="selectUser(user)" class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3" [ngClass]="{'ct-bg-semi-dark': user.id === selectedUserId}">
-                <img [src]="user.avatarUrl" alt="Profile" class="h-10 w-10 rounded-full">
+                <img [src]="user.avatarUrl" alt="Profile" class="h-10 w-10 rounded-full" [ngClass]="{'border-2 border-green-500': user.isOnline}">
                 <div class="flex-1">
-                  <div class="flex justify-between text-white">
+                  <div class="flex justify-between items-center text-white">
                     <span class="font-semibold">{{ user.name }}</span>
-                    <span class="text-xs">{{ user.lastActiveTime }}</span>
+                    <div class="flex items-center gap-2">
+                      @if (user.unreadCount && user.id !== selectedUserId) {
+                        <span class="text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded-full">{{ user.unreadCount }}</span>
+                      }
+                      <span class="text-xs">{{ user.lastActiveTime }}</span>
+                    </div>
                   </div>
-                  <span class="text-gray-400 text-xs w-full">{{ user.lastMessage }}</span>
+                  <span class="text-gray-400 text-xs w-full truncate">{{ user.lastMessage || 'No messages yet' }}</span>
                 </div>
               </div>
             }
@@ -71,7 +89,7 @@
             <!-- Chat Header -->
             <div class="flex justify-between items-center ct-bg-semi-dark py-4 px-6">
               <div class="flex items-center space-x-3">
-                <img [src]="selectedUser?.avatarUrl || 'assets/images/profile.jpeg'" alt="Profile" class="h-6 w-6 rounded-full">
+                <img [src]="selectedUser?.avatarUrl || 'assets/images/profile.jpeg'" alt="Profile" class="h-6 w-6 rounded-full" [ngClass]="{'border-2 border-green-500': selectedUser?.isOnline}">
                 <span class="text-lg font-bold">{{ selectedUser?.name || 'Select a chat' }}</span>
               </div>
               <div class="flex items-center space-x-4">
@@ -87,6 +105,19 @@
                   <div class="bg-gray-800 text-gray-200 text-xs px-4 py-2 rounded-full shadow-lg border border-gray-600 backdrop-blur-sm">
                     {{ currentStickyDate }}
                   </div>
+                </div>
+              }
+
+              <!-- New Chats CTA (WhatsApp style) -->
+              @if (showScrollToBottomButton) {
+                <div class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex justify-center">
+                  <button (click)="scrollToBottom()" class="pointer-events-auto flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-full shadow-lg border border-indigo-400/40">
+                    <span>New chats</span>
+                    @if (unreadMessageCount > 0) {<span class="bg-white/20 text-[10px] px-1.5 py-0.5 rounded-full">{{ unreadMessageCount }}</span>}
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
+                      <path fill-rule="evenodd" d="M12 4.5a.75.75 0 0 1 .75.75v11.69l3.47-3.47a.75.75 0 1 1 1.06 1.06l-4.75 4.75a.75.75 0 0 1-1.06 0l-4.75-4.75a.75.75 0 1 1 1.06-1.06l3.47 3.47V5.25A.75.75 0 0 1 12 4.5Z" clip-rule="evenodd" />
+                    </svg>
+                  </button>
                 </div>
               }
               
@@ -149,6 +180,7 @@
               </span>
             }
 
+
             <span (click)="sendTextMessage()" class="send-message flex items-center justify-center w-10 h-full bg-indigo-500 rounded-lg cursor-pointer">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="#ffffff" class="size-6">
                 <path fill="#ffffff" stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
@@ -192,4 +224,35 @@
       <span class="text-gray-500 font-semibold text-sm">&copy; Chat Verse</span>
     </div>
   </footer>
+
+  <!-- Slide-over: Friend Requests -->
+  @if (isRequestsOpen) {
+    <div class="fixed inset-0 z-40 flex">
+      <div class="fixed inset-0 bg-black/50" (click)="isRequestsOpen=false"></div>
+      <div class="ml-auto h-full w-full sm:w-[420px] ct-bg-light border-l border-[#232323] p-4 overflow-y-auto z-50">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-white font-semibold">Friend Requests</h3>
+          <button class="text-gray-400 hover:text-gray-200" (click)="isRequestsOpen=false">✕</button>
+        </div>
+        @if (pendingRequests.length === 0) {
+          <div class="text-gray-400 text-sm">No pending requests.</div>
+        } @else {
+          <div class="flex flex-col gap-2">
+            @for (req of pendingRequests; track req.$id) {
+              <div class="flex items-center justify-between ct-bg-semi-dark rounded-lg px-3 py-2">
+                <div class="flex flex-col">
+                  <span class="text-white text-sm font-medium">{{ req.requesterId }}</span>
+                  @if (req.requestedAt) {<span class="text-xs text-gray-400">Requested: {{ req.requestedAt | date:'short' }}</span>}
+                </div>
+                <div class="flex gap-2">
+                  <button (click)="acceptRequest(req.$id)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded-md">Accept</button>
+                  <button (click)="declineRequest(req.$id)" class="text-xs bg-gray-700 hover:bg-gray-800 text-white px-2 py-1 rounded-md">Decline</button>
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    </div>
+  }
 </div>

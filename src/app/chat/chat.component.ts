@@ -42,11 +42,15 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   // Online status tracking
   private onlineStatusInterval?: number;
-  private readonly OFFLINE_THRESHOLD = 5; // 5 seconds
+  private readonly OFFLINE_THRESHOLD_SECONDS = 40; // seconds; must exceed heartbeat interval
 
   // Friends UI state
   isRequestsOpen: boolean = false;
   pendingRequests: Array<{ $id: string; requesterId: string; requestedAt?: string }> = [];
+
+  // Files slide-over
+  isFilesOpen: boolean = false;
+  filesByType: { images: any[]; audio: any[]; documents: any[] } = { images: [], audio: [], documents: [] };
 
   get filteredUsers(): UserInterface[] {
     const term = this.searchTerm.trim().toLowerCase();
@@ -57,10 +61,11 @@ export class ChatComponent implements OnInit, OnDestroy{
     );
   }
 
+  // Selected chat partner's custom userId (not Appwrite account id)
   selectedUserId: string | null = null;
 
   get selectedUser(): UserInterface | null {
-    return this.users.find(u => u.id === this.selectedUserId) ?? null;
+    return this.users.find(u => u.userId === this.selectedUserId) ?? null;
   }
 
   // WhatsApp-style date formatting
@@ -240,11 +245,21 @@ export class ChatComponent implements OnInit, OnDestroy{
   }
 
   selectUser(user: UserInterface) {
-    this.selectedUserId = user.id;
+    // Use custom userId for chat identification
+    this.selectedUserId = user.userId;
     // Reset unread count when opening a chat
-    const idx = this.users.findIndex(u => u.id === user.id);
+    const idx = this.users.findIndex(u => u.userId === user.userId);
     if (idx !== -1) this.users[idx].unreadCount = 0;
+    // Record last read timestamp for this chat
+    try {
+      const map = JSON.parse(localStorage.getItem('chat_last_read_ts') || '{}');
+      map[user.userId] = Date.now();
+      localStorage.setItem('chat_last_read_ts', JSON.stringify(map));
+    } catch {}
+    this.persistUnreadCounts();
     this.loadMessagesForSelectedUser();
+    // Recompute unread counts after switching
+    this.recomputeUnreadCountsFromMessages();
   }
 
   private unsubscribeRealtime?: () => void;
@@ -313,11 +328,12 @@ export class ChatComponent implements OnInit, OnDestroy{
       // Start presence heartbeat and initial load (no-op if not configured)
       this.stopPresence = await this.appWrite.startPresenceHeartbeat();
       await this.loadOnlineUsers();
+      await this.recomputeUnreadCountsFromMessages();
       // Subscribe to presence updates (no-op if not configured)
       this.unsubscribePresence = this.appWrite.subscribeToPresence(() => {
         this.loadOnlineUsers();
       });
-      // Global message subscription to keep chat list lastMessage fresh even when chat not active
+      // Global message subscription to keep chat list lastMessage/unread fresh even when chat not active
       this.unsubscribeGlobalMessages = this.appWrite.subscribeToAllMessages(async (doc: any) => {
         const meNow = await this.appWrite.getUser().catch(() => null);
         const myCustom = (meNow as any)?.prefs?.userId;
@@ -365,7 +381,7 @@ export class ChatComponent implements OnInit, OnDestroy{
   private async loadOnlineUsers() {
     try {
       const [docs, me] = await Promise.all([
-        this.appWrite.listOnlineUsers(60),
+        this.appWrite.listOnlineUsers(120),
         this.appWrite.getUser().catch(() => null)
       ]);
       const myId = me?.$id ?? null;
@@ -389,22 +405,26 @@ export class ChatComponent implements OnInit, OnDestroy{
         .map((d: any) => {
           const lastSeen = new Date(d.lastSeen);
           const timeDiff = now.getTime() - lastSeen.getTime();
-          const isOnline = timeDiff < this.OFFLINE_THRESHOLD;
+          const isOnline = timeDiff < this.OFFLINE_THRESHOLD_SECONDS * 1000;
           
           return {
-            id: d.appwriteUserId || d.userId, // Use Appwrite account ID for chat compatibility
-            userId: d.userId, // Custom userId
+            id: d.appwriteUserId || d.userId,
+            userId: d.userId,
             name: d.name || 'User',
             avatarUrl: d.avatarUrl || 'assets/images/profile.jpeg',
-            lastMessage: '',
+            // Keep existing lastMessage if we already have this user to avoid flicker
+            lastMessage: this.users.find(u => u.userId === d.userId)?.lastMessage || '',
             lastActiveTime: lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             isOnline: isOnline,
-            lastMessageTimestamp: undefined
+            lastMessageTimestamp: this.users.find(u => u.userId === d.userId)?.lastMessageTimestamp || undefined,
+            unreadCount: this.users.find(u => u.userId === d.userId)?.unreadCount || 0
           };
         });
 
-      // Load past chats and get last messages for sorting
-      await this.loadPastChatsAndSort(allUsers, myId);
+      // Load past chats and get last messages for sorting (use custom userId for message mapping)
+      await this.loadPastChatsAndSort(allUsers, myCustomUserId ?? null);
+      // After users loaded, restore unread counts from storage
+      this.restoreUnreadCounts();
       // Ensure global subscription keeps lastMessage fresh; avoid stale overwrites
       
       this.cdr.detectChanges();
@@ -416,24 +436,25 @@ export class ChatComponent implements OnInit, OnDestroy{
     }
   }
 
-  private async loadPastChatsAndSort(users: UserInterface[], myId: string | null) {
-    if (!myId) {
+  private async loadPastChatsAndSort(users: UserInterface[], myCustomUserIdForMsgs: string | null) {
+    if (!myCustomUserIdForMsgs) {
       this.users = users;
       return;
     }
 
     try {
       // Get all unique chat partners from messages
-      const allMessages = await this.appWrite.listAllMessages(myId);
+      const allMessages = await this.appWrite.listAllMessages(myCustomUserIdForMsgs);
       const chatPartners = new Map<string, { lastMessage: string; lastMessageTimestamp: Date }>();
 
       // Process messages to find last message for each chat partner
       allMessages.forEach((msg: any) => {
-        const chatId = msg.chatId;
         const sentAt = new Date(msg.sentAt);
+        // Normalize key to ALWAYS be the other participant's custom userId
+        const partnerId = msg.chatId === myCustomUserIdForMsgs ? msg.senderId : msg.chatId;
         
-        if (!chatPartners.has(chatId) || chatPartners.get(chatId)!.lastMessageTimestamp < sentAt) {
-          chatPartners.set(chatId, {
+        if (!chatPartners.has(partnerId) || chatPartners.get(partnerId)!.lastMessageTimestamp < sentAt) {
+          chatPartners.set(partnerId, {
             lastMessage: msg.type === 'audio' ? 'Audio message' : msg.text || '',
             lastMessageTimestamp: sentAt
           });
@@ -442,7 +463,9 @@ export class ChatComponent implements OnInit, OnDestroy{
 
       // Update users with last message info
       const updatedUsers = users.map(user => {
-        const chatInfo = chatPartners.get(user.id);
+        // Prefer matching by custom userId; fall back to id only if missing userId
+        const key = user.userId || user.id;
+        const chatInfo = chatPartners.get(key);
         if (chatInfo) {
           return {
             ...user,
@@ -505,34 +528,35 @@ export class ChatComponent implements OnInit, OnDestroy{
   }
 
   private updateOnlineStatus() {
-    const now = new Date();
-    let hasChanges = false;
-    
-    this.users.forEach(user => {
-      const wasOnline = user.isOnline;
-      
-      // Check if user should be considered offline
-      // This is a simplified check - in production you'd have more sophisticated logic
-      // For now, we'll simulate offline detection by checking if the user is still in the online users list
-      this.checkUserOnlineStatus(user).then(isOnline => {
-        if (user.isOnline !== isOnline) {
-          user.isOnline = isOnline;
-          hasChanges = true;
+    // Fetch once and update all users atomically to avoid status flapping
+    this.appWrite.listOnlineUsers(120).then((docs: any[]) => {
+      const now = new Date();
+      const onlineSet = new Set<string>();
+      docs.forEach((d: any) => {
+        const lastSeen = new Date(d.lastSeen);
+        const timeDiff = now.getTime() - lastSeen.getTime();
+        if (timeDiff < this.OFFLINE_THRESHOLD_SECONDS * 1000) {
+          onlineSet.add(d.userId);
         }
       });
-    });
-    
-    if (hasChanges) {
-      this.cdr.detectChanges();
-    }
+      let changed = false;
+      this.users.forEach(u => {
+        const next = onlineSet.has(u.userId);
+        if (u.isOnline !== next) {
+          u.isOnline = next;
+          changed = true;
+        }
+      });
+      if (changed) this.cdr.detectChanges();
+    }).catch(() => {});
   }
 
   private async checkUserOnlineStatus(user: UserInterface): Promise<boolean> {
     try {
       // In a real implementation, you'd check the user's last activity
       // For now, we'll simulate by checking if they're still in the recent online users
-      const docs = await this.appWrite.listOnlineUsers(60);
-      const userDoc = docs.find((d: any) => d.userId === user.id);
+      const docs = await this.appWrite.listOnlineUsers(120);
+      const userDoc = docs.find((d: any) => d.userId === user.userId);
       
       if (!userDoc) {
         return false; // User not in online list, consider offline
@@ -541,7 +565,7 @@ export class ChatComponent implements OnInit, OnDestroy{
       // Check if last seen is within threshold
       const lastSeen = new Date(userDoc.lastSeen);
       const timeDiff = new Date().getTime() - lastSeen.getTime();
-      return timeDiff < this.OFFLINE_THRESHOLD;
+      return timeDiff < this.OFFLINE_THRESHOLD_SECONDS * 1000;
     } catch (e) {
       console.error('Failed to check user online status', e);
       return user.isOnline; // Keep current status on error
@@ -600,6 +624,61 @@ export class ChatComponent implements OnInit, OnDestroy{
     }
   }
 
+  // Clear chat for both users
+  async clearChat() {
+    if (!this.selectedUserId) return;
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    try {
+      await this.appWrite.deleteConversation(this.selectedUserId, myCustomId);
+      // Clear local messages and update lastMessage for the user entry
+      this.messages = [];
+      const idx = this.users.findIndex(u => u.userId === this.selectedUserId);
+      if (idx !== -1) {
+        this.users[idx].lastMessage = '';
+        this.users[idx].lastMessageTimestamp = undefined;
+        this.users[idx].unreadCount = 0;
+      }
+      this.persistUnreadCounts();
+      this.cdr.detectChanges();
+    } catch (e) {
+      console.error('Failed to clear chat', e);
+    }
+  }
+
+  toggleFiles() {
+    this.isFilesOpen = !this.isFilesOpen;
+    if (this.isFilesOpen) {
+      this.loadFilesForConversation();
+    }
+  }
+
+  private async loadFilesForConversation() {
+    if (!this.selectedUserId) return;
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    const docs = await this.appWrite.listMessages(this.selectedUserId, myCustomId, 500);
+    const images: any[] = [];
+    const audio: any[] = [];
+    const documents: any[] = [];
+    docs.forEach((d: any) => {
+      if (d.type === 'audio' && d.url) {
+        audio.push(d);
+      }
+      // naive image detection if implemented later
+      if (d.type === 'image' && d.url) {
+        images.push(d);
+      }
+      if (d.type === 'file' && d.url) {
+        documents.push(d);
+      }
+    });
+    this.filesByType = { images, audio, documents };
+    this.cdr.detectChanges();
+  }
+
   private async loadMessagesForSelectedUser() {
     if (!this.selectedUserId) return;
     try {
@@ -614,7 +693,7 @@ export class ChatComponent implements OnInit, OnDestroy{
 
       const myId = (currentUser as any)?.prefs?.userId ?? null;
 
-      // Load both directions: messages where chatId is either me or selected user
+      // Load both directions using custom userIds
       const docs = await this.appWrite.listMessages(this.selectedUserId, myId || undefined);
       this.messages = docs.map((d: any) => {
         const isAudio = d.type === 'audio';
@@ -691,6 +770,16 @@ export class ChatComponent implements OnInit, OnDestroy{
           
           // Handle new message received (WhatsApp style)
           this.onNewMessageReceived();
+          // Persist unread counts after realtime update
+          this.persistUnreadCounts();
+          // If message belongs to active chat, update lastRead to now so unread elsewhere isn't affected
+          try {
+            const map = JSON.parse(localStorage.getItem('chat_last_read_ts') || '{}');
+            if (this.selectedUserId) {
+              map[this.selectedUserId] = Date.now();
+              localStorage.setItem('chat_last_read_ts', JSON.stringify(map));
+            }
+          } catch {}
         });
       }
     } catch (e) {
@@ -771,15 +860,21 @@ export class ChatComponent implements OnInit, OnDestroy{
   }
 
   private updateUserListOptimistically(chatId: string, messageText: string, timestamp: Date) {
-    const userIndex = this.users.findIndex(u => u.id === chatId);
+    // chatId here represents the custom userId
+    const userIndex = this.users.findIndex(u => u.userId === chatId);
     if (userIndex !== -1) {
-      this.users[userIndex].lastMessage = messageText;
-      this.users[userIndex].lastMessageTimestamp = timestamp;
+      // Only update if newer than what we have
+      const prevTs = this.users[userIndex].lastMessageTimestamp;
+      if (!prevTs || prevTs.getTime() <= timestamp.getTime()) {
+        this.users[userIndex].lastMessage = messageText;
+        this.users[userIndex].lastMessageTimestamp = timestamp;
+      }
       this.users[userIndex].lastActiveTime = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       
       // Re-sort the users array
       this.sortUsers();
       this.cdr.detectChanges();
+      this.persistUnreadCounts();
     }
   }
 
@@ -790,10 +885,15 @@ export class ChatComponent implements OnInit, OnDestroy{
     const messageText = doc.type === 'audio' ? 'Audio message' : doc.text || '';
     const timestamp = new Date(doc.sentAt);
     
-    const userIndex = this.users.findIndex(u => u.id === chatId);
+    // Find by custom userId for stability
+    const userIndex = this.users.findIndex(u => u.userId === chatId);
     if (userIndex !== -1) {
-      this.users[userIndex].lastMessage = messageText;
-      this.users[userIndex].lastMessageTimestamp = timestamp;
+      // Only update last message if this message is newer
+      const prevTs = this.users[userIndex].lastMessageTimestamp;
+      if (!prevTs || prevTs.getTime() <= timestamp.getTime()) {
+        this.users[userIndex].lastMessage = messageText;
+        this.users[userIndex].lastMessageTimestamp = timestamp;
+      }
       this.users[userIndex].lastActiveTime = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       // Increment unread count if this chat is not currently active and message is not mine
       if (this.selectedUserId !== chatId && doc.senderId !== myId) {
@@ -804,7 +904,7 @@ export class ChatComponent implements OnInit, OnDestroy{
       // Add new user if they don't exist in the list
       this.users.push({
         id: chatId,
-        userId: chatId, // For new users, we'll use the chatId as userId for now
+        userId: chatId, // Fallback when we don't have presence mapping
         name: 'User', // We don't have name info for new users
         avatarUrl: 'assets/images/profile.jpeg',
         lastMessage: messageText,
@@ -818,6 +918,7 @@ export class ChatComponent implements OnInit, OnDestroy{
     // Re-sort the users array
     this.sortUsers();
     this.cdr.detectChanges();
+    this.persistUnreadCounts();
   }
 
   private sortUsers() {
@@ -836,6 +937,62 @@ export class ChatComponent implements OnInit, OnDestroy{
       // Finally by name
       return a.name.localeCompare(b.name);
     });
+  }
+
+  // Persist and restore unread counts across refreshes using localStorage
+  private persistUnreadCounts() {
+    try {
+      const map: Record<string, number> = {};
+      this.users.forEach(u => { if (u.userId) map[u.userId] = u.unreadCount || 0; });
+      localStorage.setItem('chat_unread_counts', JSON.stringify(map));
+    } catch {}
+  }
+
+  private restoreUnreadCounts() {
+    try {
+      const raw = localStorage.getItem('chat_unread_counts');
+      if (!raw) return;
+      const map = JSON.parse(raw || '{}') as Record<string, number>;
+      this.users.forEach(u => {
+        if (u.userId && map[u.userId] !== undefined) {
+          u.unreadCount = map[u.userId];
+        }
+      });
+    } catch {}
+  }
+
+  // Compute unread counts based on last seen message timestamp per chat
+  private async recomputeUnreadCountsFromMessages() {
+    try {
+      const me = await this.appWrite.getUser().catch(() => null);
+      const myCustomId = (me as any)?.prefs?.userId;
+      if (!myCustomId) return;
+      const all = await this.appWrite.listAllMessages(myCustomId, 1000);
+      const lastRead = JSON.parse(localStorage.getItem('chat_last_read_ts') || '{}') as Record<string, number>;
+      const counts: Record<string, number> = {};
+      // Count only messages sent by partner after lastRead
+      all.forEach((m: any) => {
+        const partnerId = m.chatId === myCustomId ? m.senderId : m.chatId;
+        const ts = new Date(m.sentAt).getTime();
+        const last = lastRead[partnerId] || 0;
+        const sentByPartner = m.senderId !== myCustomId;
+        if (sentByPartner && ts > last) {
+          counts[partnerId] = (counts[partnerId] || 0) + 1;
+        }
+      });
+      // Apply to users; active chat always 0 and bump its lastRead to now
+      this.users.forEach(u => {
+        if (this.selectedUserId === u.userId) {
+          u.unreadCount = 0;
+          lastRead[u.userId!] = Date.now();
+        } else {
+          u.unreadCount = counts[u.userId!] || 0;
+        }
+      });
+      localStorage.setItem('chat_last_read_ts', JSON.stringify(lastRead));
+      this.persistUnreadCounts();
+      this.cdr.detectChanges();
+    } catch {}
   }
 
   // Friend Management Methods

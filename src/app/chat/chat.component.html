@@ -38,7 +38,7 @@
         </div>
 
         <!-- Chat List -->
-        <div class="flex flex-col flex-1 gap-2 ct-bg-light rounded-xl overflow-y-auto">
+        <div class="flex flex-col flex-1 gap-2 ct-bg-light rounded-xl overflow-y-auto overflow-x-hidden">
           <div class="flex justify-between items-center pl-4 pr-4 pt-4">
             <span class="font-semibold">Chats</span>
             <div class="flex gap-2 items-center">
@@ -54,20 +54,25 @@
             </div>
           </div>
           <div class="flex flex-col gap-2 py-2 px-1 ct-bg-light rounded-xl">
-            @for (user of filteredUsers; track user.id) {
-              <div (click)="selectUser(user)" class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3" [ngClass]="{'ct-bg-semi-dark': user.id === selectedUserId}">
-                <img [src]="user.avatarUrl" alt="Profile" class="h-10 w-10 rounded-full" [ngClass]="{'border-2 border-green-500': user.isOnline}">
-                <div class="flex-1">
+            @for (user of filteredUsers; track user.userId) {
+              <div (click)="selectUser(user)" class="relative chat-user cursor-pointer flex items-start rounded-xl space-x-3 p-3" [ngClass]="{'ct-bg-semi-dark': user.userId === selectedUserId}">
+                <div class="relative">
+                  <img [src]="user.avatarUrl" alt="Profile" class="h-10 w-10 rounded-full">
+                  @if (user.isOnline) {
+                    <span class="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full ring-2 ring-[#2b2b36] bg-green-500"></span>
+                  }
+                </div>
+                <div class="flex-1 min-w-0">
                   <div class="flex justify-between items-center text-white">
                     <span class="font-semibold">{{ user.name }}</span>
                     <div class="flex items-center gap-2">
-                      @if (user.unreadCount && user.id !== selectedUserId) {
+                      @if (user.unreadCount && user.userId !== selectedUserId) {
                         <span class="text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded-full">{{ user.unreadCount }}</span>
                       }
                       <span class="text-xs">{{ user.lastActiveTime }}</span>
                     </div>
                   </div>
-                  <span class="text-gray-400 text-xs w-full truncate">{{ user.lastMessage || 'No messages yet' }}</span>
+                  <span class="block text-gray-400 text-xs w-full truncate">{{ user.lastMessage || 'No messages yet' }}</span>
                 </div>
               </div>
             }
@@ -93,8 +98,8 @@
                 <span class="text-lg font-bold">{{ selectedUser?.name || 'Select a chat' }}</span>
               </div>
               <div class="flex items-center space-x-4">
-                <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Clear Chat</span>
-                <span class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Files</span>
+                <span (click)="clearChat()" class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Clear Chat</span>
+                <span (click)="toggleFiles()" class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Files</span>
               </div>
             </div>
             <!-- Chat Messages -->
@@ -252,6 +257,44 @@
             }
           </div>
         }
+      </div>
+    </div>
+  }
+
+  <!-- Slide-over: Files -->
+  @if (isFilesOpen) {
+    <div class="fixed inset-0 z-40 flex">
+      <div class="fixed inset-0 bg-black/50" (click)="isFilesOpen=false"></div>
+      <div class="ml-auto h-full w-full sm:w-[520px] ct-bg-light border-l border-[#232323] p-4 overflow-y-auto z-50">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-white font-semibold">Shared Files</h3>
+          <button class="text-gray-400 hover:text-gray-200" (click)="isFilesOpen=false">✕</button>
+        </div>
+        <div class="flex gap-2 mb-4 text-xs">
+          <button class="ct-bg-semi-dark rounded px-2 py-1">Images ({{ filesByType.images.length }})</button>
+          <button class="ct-bg-semi-dark rounded px-2 py-1">Audio ({{ filesByType.audio.length }})</button>
+          <button class="ct-bg-semi-dark rounded px-2 py-1">Documents ({{ filesByType.documents.length }})</button>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <div class="text-gray-300 text-sm mb-2">Audio</div>
+            @if (filesByType.audio.length === 0) { <div class="text-gray-500 text-xs">No audio files.</div> }
+            @for (f of filesByType.audio; track f.$id) {
+              <div class="ct-bg-semi-dark rounded-md px-3 py-2 mb-2 flex items-center justify-between">
+                <span class="text-xs text-gray-300 truncate">{{ f.url || f.text }}</span>
+                <a [href]="f.url" target="_blank" class="text-indigo-400 text-xs">Open</a>
+              </div>
+            }
+          </div>
+          <div>
+            <div class="text-gray-300 text-sm mb-2">Images</div>
+            @if (filesByType.images.length === 0) { <div class="text-gray-500 text-xs">No images.</div> }
+          </div>
+          <div>
+            <div class="text-gray-300 text-sm mb-2">Documents</div>
+            @if (filesByType.documents.length === 0) { <div class="text-gray-500 text-xs">No documents.</div> }
+          </div>
+        </div>
       </div>
     </div>
   }

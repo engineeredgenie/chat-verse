@@ -238,6 +238,37 @@ export class AppwriteService {
   }
 
   /**
+   * Delete all messages in a conversation between two custom userIds.
+   * This clears the chat for both users since messages are shared.
+   */
+  async deleteConversation(userIdA: string, userIdB: string) {
+    const result = await this.databases.listDocuments(
+      environment.appwriteDatabaseId,
+      environment.appwriteMessagesCollectionId,
+      [
+        Query.or([
+          Query.and([Query.equal('chatId', userIdA), Query.equal('senderId', userIdB)]),
+          Query.and([Query.equal('chatId', userIdB), Query.equal('senderId', userIdA)])
+        ]),
+        Query.limit(1000)
+      ]
+    );
+    const docs = result.documents || [];
+    for (const doc of docs) {
+      try {
+        await this.databases.deleteDocument(
+          environment.appwriteDatabaseId,
+          environment.appwriteMessagesCollectionId,
+          doc.$id
+        );
+      } catch (e) {
+        console.error('Failed to delete message', doc.$id, e);
+      }
+    }
+    return docs.length;
+  }
+
+  /**
    * Subscribe to realtime changes for the messages collection and invoke handler
    * when a message for the provided chatId is created.
    * Returns a function to unsubscribe.

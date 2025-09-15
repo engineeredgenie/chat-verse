@@ -100,6 +100,7 @@
               <div class="flex items-center space-x-4">
                 <span (click)="clearChat()" class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Clear Chat</span>
                 <span (click)="toggleFiles()" class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Files</span>
+                <span (click)="toggleFriendsManager()" class="cursor-pointer text-xs font-light ct-bg-light hover:bg-gray-600! rounded-md px-2 py-0.5">Manage Friends</span>
               </div>
             </div>
             <!-- Chat Messages -->
@@ -164,6 +165,7 @@
             </div>
           </div>
           <!-- Chat Composer -->
+          @if (!isChatBlocked && isFriendsWithSelected) {
           <div class="flex space-x-3 items-center h-10 w-full">
             <textarea [(ngModel)]="message" (keydown)="onComposerKeydown($event)" placeholder="Write a message ..." rows="1" class="flex-1 resize-none text-white text-sm ct-bg-light placeholder-gray-400 outline-none h-full px-4 py-2 border border-black rounded-lg"></textarea>
             <span class="send-image flex items-center justify-center w-10 h-full ct-bg-light cursor-pointer rounded-lg">
@@ -192,6 +194,18 @@
               </svg>
             </span>
           </div>
+          } @else {
+            <div class="flex items-center justify-between ct-bg-light border border-[#232323] rounded-lg px-4 py-2 text-xs text-gray-300">
+              @if (isChatBlocked) {
+                <span>Messaging is disabled. You have blocked or been blocked in this chat.</span>
+              } @else {
+                <div class="flex items-center gap-2">
+                  <span>You are not friends. Send a new friend request to chat.</span>
+                  <button (click)="resendFriendRequest()" class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-md">Resend Request</button>
+                </div>
+              }
+            </div>
+          }
         } @else {
           <!-- Select a Chat Message -->
           <div class="flex flex-col flex-1 rounded-xl overflow-hidden ct-bg-light">
@@ -293,6 +307,60 @@
           <div>
             <div class="text-gray-300 text-sm mb-2">Documents</div>
             @if (filesByType.documents.length === 0) { <div class="text-gray-500 text-xs">No documents.</div> }
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Slide-over: Friends Manager -->
+  @if (isFriendsManagerOpen) {
+    <div class="fixed inset-0 z-40 flex">
+      <div class="fixed inset-0 bg-black/50" (click)="isFriendsManagerOpen=false"></div>
+      <div class="ml-auto h-full w-full sm:w-[520px] ct-bg-light border-l border-[#232323] p-4 overflow-y-auto z-50">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-white font-semibold">Friends</h3>
+          <button class="text-gray-400 hover:text-gray-200" (click)="isFriendsManagerOpen=false">✕</button>
+        </div>
+        <div class="space-y-6">
+          <div>
+            <div class="text-gray-300 text-sm mb-2">Accepted</div>
+            @if (friendsList.length === 0) { <div class="text-gray-500 text-xs">No friends yet.</div> }
+            @for (fid of friendsList; track fid) {
+              <div class="ct-bg-semi-dark rounded-md px-3 py-2 mb-2 flex items-center justify-between">
+                <span class="text-xs text-gray-300">{{ fid }}</span>
+                <div class="flex gap-2">
+                  @if (!(blockedUsers | json).includes(fid)) {
+                    <button class="text-xs bg-gray-700 hover:bg-gray-800 text-white px-2 py-1 rounded-md" (click)="blockUser(fid)">Block</button>
+                  }
+                  <button class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded-md" (click)="unfriend(fid)">Unfriend</button>
+                </div>
+              </div>
+            }
+          </div>
+          <div>
+            <div class="text-gray-300 text-sm mb-2">Outgoing Requests</div>
+            @if (outgoingRequests.length === 0) { <div class="text-gray-500 text-xs">No outgoing requests.</div> }
+            @for (req of outgoingRequests; track req.$id) {
+              <div class="ct-bg-semi-dark rounded-md px-3 py-2 mb-2 flex items-center justify-between">
+                <span class="text-xs text-gray-300">{{ req.addresseeId }}</span>
+                <div class="flex gap-2">
+                  <button class="text-xs bg-gray-700 hover:bg-gray-800 text-white px-2 py-1 rounded-md" (click)="cancelOutgoing(req.addresseeId)">Cancel</button>
+                </div>
+              </div>
+            }
+          </div>
+          <div>
+            <div class="text-gray-300 text-sm mb-2">Blocked</div>
+            @if (blockedUsers.length === 0) { <div class="text-gray-500 text-xs">No blocked users.</div> }
+            @for (b of blockedUsers; track b.$id) {
+              <div class="ct-bg-semi-dark rounded-md px-3 py-2 mb-2 flex items-center justify-between">
+                <span class="text-xs text-gray-300">{{ b.addresseeId }}</span>
+                <div class="flex gap-2">
+                  <button class="text-xs bg-gray-700 hover:bg-gray-800 text-white px-2 py-1 rounded-md" (click)="unblockUser(b.addresseeId)">Unblock</button>
+                </div>
+              </div>
+            }
           </div>
         </div>
       </div>

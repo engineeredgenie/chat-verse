@@ -2,8 +2,9 @@
   <nav class="flex justify-between items-center py-6">
     <h1 class="text-3xl font-bold">ChatVerse</h1>
 
-    <ul class="flex list-none gap-x-6">
-      <li><a routerLink="/">Home</a></li>
+    <ul class="flex list-none gap-x-6 items-center">
+      <li class="text-gray-400 text-sm" *ngIf="userId">ID: <span class="text-gray-200 font-mono">{{ userId }}</span></li>
+      <li><button (click)="triggerManageFriends()" class="cursor-pointer ct-bg-light px-2 py-1 rounded-md text-sm">Manage Friends</button></li>
       <li><a (click)="logout()" class="cursor-pointer">Logout</a></li>
     </ul>
   </nav>

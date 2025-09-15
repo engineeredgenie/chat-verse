@@ -276,15 +276,22 @@ export class AppwriteService {
   subscribeToConversation(userIdA: string, userIdB: string, handler: (doc: any) => void): () => void {
     const channel = `databases.${environment.appwriteDatabaseId}.collections.${environment.appwriteMessagesCollectionId}.documents`;
     const unsubscribe = this.client.subscribe(channel, (event: any) => {
-      const isCreate = Array.isArray(event.events)
-        ? event.events.some((e: string) => e.endsWith('.create'))
-        : false;
+      const events: string[] = Array.isArray(event.events) ? event.events : [];
+      const isCreate = events.some((e: string) => e.endsWith('.create'));
+      const isDelete = events.some((e: string) => e.endsWith('.delete'));
       const document = event?.payload;
-      if (!document || !isCreate) return;
+      if (!document) return;
       const chatMatch = document.chatId === userIdA || document.chatId === userIdB;
       const senderMatch = document.senderId === userIdA || document.senderId === userIdB;
       if (chatMatch && senderMatch) {
-        handler(document);
+        if (isCreate) {
+          handler(document);
+        } else if (isDelete) {
+          try {
+            (document as any)._op = 'delete';
+          } catch {}
+          handler(document);
+        }
       }
     });
 
@@ -539,6 +546,26 @@ export class AppwriteService {
     }
   }
 
+  async getOutgoingFriendRequests(userId: string) {
+    if (!environment.appwriteFriendsCollectionId) return [];
+    try {
+      const result = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        [
+          Query.and([
+            Query.equal('requesterId', userId),
+            Query.equal('status', 'pending')
+          ])
+        ]
+      );
+      return result.documents;
+    } catch (e) {
+      console.error('Failed to get outgoing friend requests', e);
+      return [];
+    }
+  }
+
   async removeFriend(friendshipId: string) {
     if (!environment.appwriteFriendsCollectionId) {
       throw new Error('Friends collection not configured');
@@ -549,5 +576,154 @@ export class AppwriteService {
       environment.appwriteFriendsCollectionId,
       friendshipId
     );
+  }
+
+  async unfriend(userIdA: string, userIdB: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    const res = await this.databases.listDocuments(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      [
+        Query.or([
+          Query.and([Query.equal('requesterId', userIdA), Query.equal('addresseeId', userIdB)]),
+          Query.and([Query.equal('requesterId', userIdB), Query.equal('addresseeId', userIdA)])
+        ]),
+        Query.equal('status', 'accepted')
+      ]
+    );
+    for (const doc of res.documents) {
+      try {
+        await this.databases.deleteDocument(
+          environment.appwriteDatabaseId,
+          environment.appwriteFriendsCollectionId,
+          doc.$id
+        );
+      } catch {}
+    }
+  }
+
+  async isBlocked(userIdA: string, userIdB: string): Promise<boolean> {
+    if (!environment.appwriteFriendsCollectionId) return false;
+    const res = await this.databases.listDocuments(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      [
+        Query.or([
+          Query.and([Query.equal('requesterId', userIdA), Query.equal('addresseeId', userIdB), Query.equal('status', 'blocked')]),
+          Query.and([Query.equal('requesterId', userIdB), Query.equal('addresseeId', userIdA), Query.equal('status', 'blocked')])
+        ])
+      ]
+    );
+    return (res.documents?.length || 0) > 0;
+  }
+
+  // Friendship management extensions
+  async cancelOutgoingRequest(requesterId: string, addresseeId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    const existing = await this.getFriendship(requesterId, addresseeId);
+    if (!existing) return null;
+    if (existing['status'] === 'pending' && existing['requesterId'] === requesterId) {
+      return await this.databases.deleteDocument(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        existing.$id
+      );
+    }
+    return existing;
+  }
+
+  async blockUser(userId: string, blockedUserId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    // Represent blocks in same collection with a distinct status
+    return await this.databases.createDocument(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      ID.unique(),
+      {
+        requesterId: userId,
+        addresseeId: blockedUserId,
+        status: 'blocked',
+        requestedAt: new Date().toISOString()
+      }
+    );
+  }
+
+  async unblockUser(userId: string, blockedUserId: string) {
+    if (!environment.appwriteFriendsCollectionId) {
+      throw new Error('Friends collection not configured');
+    }
+    const res = await this.databases.listDocuments(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      [
+        Query.and([
+          Query.equal('requesterId', userId),
+          Query.equal('addresseeId', blockedUserId),
+          Query.equal('status', 'blocked')
+        ])
+      ]
+    );
+    const doc = res.documents[0];
+    if (doc) {
+      await this.databases.deleteDocument(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        doc.$id
+      );
+    }
+  }
+
+  async listBlockedUsers(userId: string) {
+    if (!environment.appwriteFriendsCollectionId) return [] as any[];
+    const res = await this.databases.listDocuments(
+      environment.appwriteDatabaseId,
+      environment.appwriteFriendsCollectionId,
+      [
+        Query.and([
+          Query.equal('requesterId', userId),
+          Query.equal('status', 'blocked')
+        ])
+      ]
+    );
+    return res.documents;
+  }
+
+  async isFriends(userIdA: string, userIdB: string): Promise<boolean> {
+    if (!environment.appwriteFriendsCollectionId) return false;
+    try {
+      const res = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteFriendsCollectionId,
+        [
+          Query.or([
+            Query.and([Query.equal('requesterId', userIdA), Query.equal('addresseeId', userIdB)]),
+            Query.and([Query.equal('requesterId', userIdB), Query.equal('addresseeId', userIdA)])
+          ]),
+          Query.equal('status', 'accepted')
+        ]
+      );
+      return (res.documents?.length || 0) > 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Realtime subscription for friendship changes */
+  subscribeToFriends(handler: (doc: any, events: string[]) => void): () => void {
+    if (!environment.appwriteFriendsCollectionId) {
+      return () => {};
+    }
+    const channel = `databases.${environment.appwriteDatabaseId}.collections.${environment.appwriteFriendsCollectionId}.documents`;
+    const unsubscribe = this.client.subscribe(channel, (event: any) => {
+      handler(event?.payload, event?.events || []);
+    });
+    this.activeUnsubscribes.push(unsubscribe);
+    return () => { try { unsubscribe(); } catch {} };
   }
 }

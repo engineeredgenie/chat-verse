@@ -2,14 +2,16 @@ import {ChangeDetectorRef, Component, OnDestroy, OnInit} from '@angular/core';
 import Swal from 'sweetalert2';
 import {AudioPlayerComponent} from '../audio-player/audio-player.component';
 import {FormsModule} from '@angular/forms';
-import {NgClass, DatePipe} from '@angular/common';
+import {NgClass, DatePipe, JsonPipe} from '@angular/common';
+import { environment } from '../../environments/environment';
+import { Query } from 'appwrite';
 import { MessageInterface, UserInterface } from '../interfaces';
 import {AppwriteService} from '../services/appwrite.service';
 import { HeaderComponent } from "../header/header.component";
 
 @Component({
   selector: 'app-chat',
-  imports: [AudioPlayerComponent, FormsModule, NgClass, HeaderComponent, DatePipe],
+  imports: [AudioPlayerComponent, FormsModule, NgClass, HeaderComponent, DatePipe, JsonPipe],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.scss'
 })
@@ -42,7 +44,7 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   // Online status tracking
   private onlineStatusInterval?: number;
-  private readonly OFFLINE_THRESHOLD_SECONDS = 40; // seconds; must exceed heartbeat interval
+  private readonly OFFLINE_THRESHOLD_SECONDS = 10; // seconds; must exceed heartbeat interval
 
   // Friends UI state
   isRequestsOpen: boolean = false;
@@ -51,6 +53,14 @@ export class ChatComponent implements OnInit, OnDestroy{
   // Files slide-over
   isFilesOpen: boolean = false;
   filesByType: { images: any[]; audio: any[]; documents: any[] } = { images: [], audio: [], documents: [] };
+
+  // Friends Manager
+  isFriendsManagerOpen: boolean = false;
+  friendsList: string[] = [];
+  outgoingRequests: any[] = [];
+  blockedUsers: any[] = [];
+  isChatBlocked: boolean = false;
+  isFriendsWithSelected: boolean = true;
 
   get filteredUsers(): UserInterface[] {
     const term = this.searchTerm.trim().toLowerCase();
@@ -238,6 +248,7 @@ export class ChatComponent implements OnInit, OnDestroy{
     if (this.unsubscribeRealtime) this.unsubscribeRealtime();
     if (this.unsubscribePresence) this.unsubscribePresence();
     if (this.unsubscribeGlobalMessages) this.unsubscribeGlobalMessages();
+    if (this.unsubscribeFriendsRealtime) this.unsubscribeFriendsRealtime();
     if (this.stopPresence) this.stopPresence();
     if (this.onlineStatusInterval) {
       clearInterval(this.onlineStatusInterval);
@@ -263,6 +274,7 @@ export class ChatComponent implements OnInit, OnDestroy{
   }
 
   private unsubscribeRealtime?: () => void;
+  private unsubscribeFriendsRealtime?: () => void;
 
   constructor(private cdr: ChangeDetectorRef, private appWrite: AppwriteService) {
   }
@@ -333,6 +345,19 @@ export class ChatComponent implements OnInit, OnDestroy{
       this.unsubscribePresence = this.appWrite.subscribeToPresence(() => {
         this.loadOnlineUsers();
       });
+      // Global friendship realtime to update composer and manager
+      this.unsubscribeFriendsRealtime = this.appWrite.subscribeToFriends(async (doc: any, events: string[]) => {
+        const meNow = await this.appWrite.getUser().catch(() => null);
+        const myCustom = (meNow as any)?.prefs?.userId;
+        if (!myCustom) return;
+        const involvesMeOrActive = [doc?.requesterId, doc?.addresseeId].some((v: any) => v === myCustom || v === this.selectedUserId);
+        if (!involvesMeOrActive) return;
+        if (this.selectedUserId) {
+          this.isChatBlocked = await this.appWrite.isBlocked(this.selectedUserId, myCustom);
+        }
+        if (this.isFriendsManagerOpen) await this.loadFriendsData();
+        this.cdr.detectChanges();
+      });
       // Global message subscription to keep chat list lastMessage/unread fresh even when chat not active
       this.unsubscribeGlobalMessages = this.appWrite.subscribeToAllMessages(async (doc: any) => {
         const meNow = await this.appWrite.getUser().catch(() => null);
@@ -342,6 +367,10 @@ export class ChatComponent implements OnInit, OnDestroy{
         if (!(doc.chatId === myCustom || doc.senderId === myCustom)) return;
         this.updateUserListWithNewMessage(doc, myCustom);
         this.cdr.detectChanges();
+      });
+      // Hook Manage Friends button from header
+      document.addEventListener('manageFriends', () => {
+        this.toggleFriendsManager();
       });
       // Preload pending requests badge
       await this.refreshPendingRequests();
@@ -476,21 +505,23 @@ export class ChatComponent implements OnInit, OnDestroy{
         return user;
       });
 
-      // Add users who have chat history but aren't in presence (only if they're friends)
-      const me = await this.appWrite.getUser().catch(() => null);
-      const myCustomUserId = (me as any).prefs?.userId;
-      
-      if (myCustomUserId) {
-        const friendUserIds = await this.appWrite.getFriends(myCustomUserId);
-        
-        chatPartners.forEach((chatInfo, appwriteUserId) => {
-          if (!users.find(u => u.id === appwriteUserId)) {
-            // Check if this user is a friend by looking up their custom userId
-            // For now, we'll skip adding offline users without presence data
-            // In a full implementation, you'd need to store the mapping between appwriteUserId and customUserId
-          }
-        });
-      }
+      // Add users who have chat history but aren't in presence (include even if not currently friends)
+      chatPartners.forEach((chatInfo, partnerId) => {
+        const exists = updatedUsers.find(u => u.userId === partnerId || u.id === partnerId);
+        if (!exists) {
+          updatedUsers.push({
+            id: partnerId,
+            userId: partnerId,
+            name: 'User',
+            avatarUrl: 'assets/images/profile.jpeg',
+            lastMessage: chatInfo.lastMessage,
+            lastActiveTime: chatInfo.lastMessageTimestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            isOnline: false,
+            lastMessageTimestamp: chatInfo.lastMessageTimestamp,
+            unreadCount: 0
+          } as unknown as UserInterface);
+        }
+      });
 
       // Sort by last message timestamp (most recent first), then by online status
       this.users = updatedUsers.sort((a, b) => {
@@ -508,6 +539,24 @@ export class ChatComponent implements OnInit, OnDestroy{
         // Finally by name
         return a.name.localeCompare(b.name);
       });
+
+      // Hydrate missing names/avatars from presence for users added from history
+      try {
+        const toHydrate = this.users.filter(u => !u.name || u.name === 'User');
+        if (toHydrate.length > 0) {
+          const hydrated = await Promise.all(toHydrate.map(async (u) => {
+            try {
+              const doc = await this.appWrite.findUserByCustomId(u.userId);
+              if (doc) {
+                u.name = (doc as any).name || u.name;
+                u.avatarUrl = (doc as any).avatarUrl || u.avatarUrl;
+              }
+            } catch {}
+            return u;
+          }));
+          this.cdr.detectChanges();
+        }
+      } catch {}
 
     } catch (e) {
       console.error('Failed to load past chats', e);
@@ -631,6 +680,16 @@ export class ChatComponent implements OnInit, OnDestroy{
     const myCustomId = (me as any)?.prefs?.userId;
     if (!myCustomId) return;
     try {
+      const confirm = await Swal.mixin({ timer: 3000, timerProgressBar: true, showConfirmButton: true }).fire({
+        title: 'Clear chat for both users?',
+        text: 'This will delete all messages in this conversation for everyone.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Yes, delete',
+        cancelButtonText: 'Cancel'
+      });
+      if (!confirm.isConfirmed) return;
+
       await this.appWrite.deleteConversation(this.selectedUserId, myCustomId);
       // Clear local messages and update lastMessage for the user entry
       this.messages = [];
@@ -651,6 +710,68 @@ export class ChatComponent implements OnInit, OnDestroy{
     this.isFilesOpen = !this.isFilesOpen;
     if (this.isFilesOpen) {
       this.loadFilesForConversation();
+    }
+  }
+
+  toggleFriendsManager() {
+    this.isFriendsManagerOpen = !this.isFriendsManagerOpen;
+    if (this.isFriendsManagerOpen) {
+      this.loadFriendsData();
+    }
+  }
+
+  private async loadFriendsData() {
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    this.friendsList = await this.appWrite.getFriends(myCustomId);
+    this.blockedUsers = await this.appWrite.listBlockedUsers(myCustomId);
+    // Outgoing pending
+    this.outgoingRequests = await this.appWrite.getOutgoingFriendRequests(myCustomId);
+    this.cdr.detectChanges();
+  }
+
+  async blockUser(userId: string) {
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    await this.appWrite.blockUser(myCustomId, userId);
+    await this.loadFriendsData();
+  }
+
+  async unblockUser(userId: string) {
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    await this.appWrite.unblockUser(myCustomId, userId);
+    await this.loadFriendsData();
+  }
+
+  async cancelOutgoing(addresseeId: string) {
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    await this.appWrite.cancelOutgoingRequest(myCustomId, addresseeId);
+    await this.loadFriendsData();
+  }
+
+  async unfriend(userId: string) {
+    const me = await this.appWrite.getUser().catch(() => null);
+    const myCustomId = (me as any)?.prefs?.userId;
+    if (!myCustomId) return;
+    await this.appWrite.unfriend(myCustomId, userId);
+    await this.loadFriendsData();
+  }
+
+  async resendFriendRequest() {
+    try {
+      if (!this.selectedUserId) return;
+      await this.appWrite.sendFriendRequest(this.selectedUserId);
+      Swal.fire({ title: 'Friend request sent', icon: 'success', timer: 1500, showConfirmButton: false });
+      // Refresh manager data if open
+      if (this.isFriendsManagerOpen) await this.loadFriendsData();
+    } catch (e: any) {
+      Swal.fire({ title: 'Error', text: e?.message || 'Failed to send request', icon: 'error' });
     }
   }
 
@@ -695,6 +816,9 @@ export class ChatComponent implements OnInit, OnDestroy{
 
       // Load both directions using custom userIds
       const docs = await this.appWrite.listMessages(this.selectedUserId, myId || undefined);
+      // Check blocking both ways to gate composer
+      this.isChatBlocked = myId ? await this.appWrite.isBlocked(this.selectedUserId, myId) : false;
+      this.isFriendsWithSelected = myId ? await this.appWrite.isFriends(this.selectedUserId, myId) : false;
       this.messages = docs.map((d: any) => {
         const isAudio = d.type === 'audio';
         const sentDate = new Date(d.sentAt);
@@ -780,6 +904,14 @@ export class ChatComponent implements OnInit, OnDestroy{
               localStorage.setItem('chat_last_read_ts', JSON.stringify(map));
             }
           } catch {}
+          // Friendship might have changed via realtime; refresh composer gate
+          const me2 = await this.appWrite.getUser().catch(() => null);
+          const myCustom2 = (me2 as any)?.prefs?.userId;
+          if (myCustom2) {
+            this.isFriendsWithSelected = await this.appWrite.isFriends(this.selectedUserId!, myCustom2);
+            this.isChatBlocked = await this.appWrite.isBlocked(this.selectedUserId!, myCustom2);
+            this.cdr.detectChanges();
+          }
         });
       }
     } catch (e) {

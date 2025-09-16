@@ -44,7 +44,16 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   // Online status tracking
   private onlineStatusInterval?: number;
-  private readonly OFFLINE_THRESHOLD_SECONDS = 10; // seconds; must exceed heartbeat interval
+  private readonly OFFLINE_THRESHOLD_SECONDS = 60; // seconds; must exceed heartbeat interval (20s) with buffer
+  
+  // Debounce mechanism for message checking to prevent interference with online status
+  private messageCheckTimeouts: Map<string, number> = new Map();
+
+  // Emoji picker state
+  isEmojiPickerOpen: boolean = false;
+  emojiList: string[] = [
+    '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '😚', '😙', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐', '😕', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾', '🙈', '🙉', '🙊', '💋', '👋', '🤚', '🖐️', '✋', '🖖', '👌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '👊', '✊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🦷', '🦴', '👀', '👁️', '👅', '👄', '💘', '💝', '💖', '💗', '💓', '💞', '💕', '💟', '❣️', '💔', '❤️', '🧡', '💛', '💚', '💙', '💜', '🤎', '🖤', '🤍', '💯', '💢', '💥', '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤', '👋', '🤚', '🖐️', '✋', '🖖', '👌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '👊', '✊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🦷', '🦴', '👀', '👁️', '👅', '👄', '💘', '💝', '💖', '💗', '💓', '💞', '💕', '💟', '❣️', '💔', '❤️', '🧡', '💛', '💚', '💙', '💜', '🤎', '🖤', '🤍', '💯', '💢', '💥', '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤'
+  ];
 
   // Friends UI state
   isRequestsOpen: boolean = false;
@@ -253,6 +262,9 @@ export class ChatComponent implements OnInit, OnDestroy{
     if (this.onlineStatusInterval) {
       clearInterval(this.onlineStatusInterval);
     }
+    // Clean up message check timeouts
+    this.messageCheckTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    this.messageCheckTimeouts.clear();
   }
 
   selectUser(user: UserInterface) {
@@ -352,6 +364,10 @@ export class ChatComponent implements OnInit, OnDestroy{
         if (!myCustom) return;
         const involvesMeOrActive = [doc?.requesterId, doc?.addresseeId].some((v: any) => v === myCustom || v === this.selectedUserId);
         if (!involvesMeOrActive) return;
+        
+        // Refresh pending requests count when friend requests change
+        await this.refreshPendingRequests();
+        
         if (this.selectedUserId) {
           this.isChatBlocked = await this.appWrite.isBlocked(this.selectedUserId, myCustom);
         }
@@ -365,12 +381,32 @@ export class ChatComponent implements OnInit, OnDestroy{
         if (!myCustom) return;
         // Only consider messages where I'm a participant
         if (!(doc.chatId === myCustom || doc.senderId === myCustom)) return;
+        
+        // Handle delete events
+        if ((doc as any)._op === 'delete') {
+          // When a message is deleted, we need to update the user list
+          // Determine the other participant in this conversation
+          const otherParticipantId = doc.chatId === myCustom ? doc.senderId : doc.chatId;
+          const userIndex = this.users.findIndex(u => u.userId === otherParticipantId);
+          
+          if (userIndex !== -1) {
+            // Check if this was the last message by comparing timestamps
+            const messageTimestamp = new Date(doc.sentAt);
+            const currentLastMessageTimestamp = this.users[userIndex].lastMessageTimestamp;
+            
+            // If this message matches the current last message timestamp, or if there's no current last message,
+            // we should check if there are any remaining messages
+            if (!currentLastMessageTimestamp || 
+                Math.abs(currentLastMessageTimestamp.getTime() - messageTimestamp.getTime()) < 1000) {
+              // This was likely the last message, verify by checking if there are any remaining messages
+              this.checkAndUpdateLastMessageForUser(otherParticipantId, myCustom);
+            }
+          }
+          return;
+        }
+        
         this.updateUserListWithNewMessage(doc, myCustom);
         this.cdr.detectChanges();
-      });
-      // Hook Manage Friends button from header
-      document.addEventListener('manageFriends', () => {
-        this.toggleFriendsManager();
       });
       // Preload pending requests badge
       await this.refreshPendingRequests();
@@ -597,7 +633,9 @@ export class ChatComponent implements OnInit, OnDestroy{
         }
       });
       if (changed) this.cdr.detectChanges();
-    }).catch(() => {});
+    }).catch((e) => {
+      console.error('Failed to update online status:', e);
+    });
   }
 
   private async checkUserOnlineStatus(user: UserInterface): Promise<boolean> {
@@ -618,6 +656,20 @@ export class ChatComponent implements OnInit, OnDestroy{
     } catch (e) {
       console.error('Failed to check user online status', e);
       return user.isOnline; // Keep current status on error
+    }
+  }
+
+  // Refresh presence heartbeat to ensure it's still active
+  private async refreshPresenceHeartbeat() {
+    try {
+      // Stop the current heartbeat
+      if (this.stopPresence) {
+        this.stopPresence();
+      }
+      // Restart the heartbeat
+      this.stopPresence = await this.appWrite.startPresenceHeartbeat();
+    } catch (e) {
+      console.error('Failed to refresh presence heartbeat:', e);
     }
   }
 
@@ -680,7 +732,7 @@ export class ChatComponent implements OnInit, OnDestroy{
     const myCustomId = (me as any)?.prefs?.userId;
     if (!myCustomId) return;
     try {
-      const confirm = await Swal.mixin({ timer: 3000, timerProgressBar: true, showConfirmButton: true }).fire({
+      const confirm = await Swal.fire({
         title: 'Clear chat for both users?',
         text: 'This will delete all messages in this conversation for everyone.',
         icon: 'warning',
@@ -690,8 +742,7 @@ export class ChatComponent implements OnInit, OnDestroy{
       });
       if (!confirm.isConfirmed) return;
 
-      await this.appWrite.deleteConversation(this.selectedUserId, myCustomId);
-      // Clear local messages and update lastMessage for the user entry
+      // Clear local messages immediately for better UX
       this.messages = [];
       const idx = this.users.findIndex(u => u.userId === this.selectedUserId);
       if (idx !== -1) {
@@ -701,8 +752,24 @@ export class ChatComponent implements OnInit, OnDestroy{
       }
       this.persistUnreadCounts();
       this.cdr.detectChanges();
+
+      // Delete from server (realtime will handle the rest)
+      await this.appWrite.deleteConversation(this.selectedUserId, myCustomId);
+      
+      // Refresh online status after deletion to ensure it's not affected
+      setTimeout(() => {
+        this.updateOnlineStatus();
+        // Also refresh the presence heartbeat to ensure it's still active
+        this.refreshPresenceHeartbeat();
+      }, 1000);
     } catch (e) {
       console.error('Failed to clear chat', e);
+      // Show error message to user
+      Swal.fire({
+        title: 'Error',
+        text: 'Failed to clear chat. Please try again.',
+        icon: 'error'
+      });
     }
   }
 
@@ -761,6 +828,44 @@ export class ChatComponent implements OnInit, OnDestroy{
     if (!myCustomId) return;
     await this.appWrite.unfriend(myCustomId, userId);
     await this.loadFriendsData();
+  }
+
+  async unfriendUser() {
+    if (!this.selectedUserId) return;
+    
+    const confirm = await Swal.fire({
+      title: 'Unfriend User?',
+      text: `Are you sure you want to unfriend ${this.selectedUser?.name || this.selectedUserId}?`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, unfriend',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#dc2626'
+    });
+    
+    if (!confirm.isConfirmed) return;
+    
+    try {
+      await this.unfriend(this.selectedUserId);
+      Swal.fire({
+        title: 'Unfriended',
+        text: 'User has been unfriended successfully.',
+        icon: 'success',
+        timer: 2000,
+        showConfirmButton: false
+      });
+      
+      // Don't remove user from chat list - keep past chat history
+      // Just clear the current chat and show the "not friends" message
+      this.messages = [];
+      this.cdr.detectChanges();
+    } catch (e: any) {
+      Swal.fire({
+        title: 'Error',
+        text: e?.message || 'Failed to unfriend user',
+        icon: 'error'
+      });
+    }
   }
 
   async resendFriendRequest() {
@@ -847,6 +952,17 @@ export class ChatComponent implements OnInit, OnDestroy{
       // subscribe after initial load to avoid duplicating loaded docs
       if (myId) {
         this.unsubscribeRealtime = this.appWrite.subscribeToConversation(this.selectedUserId, myId, async (doc: any) => {
+          // Handle delete events first
+          if ((doc as any)._op === 'delete') {
+            // Remove the deleted message from local array
+            const messageIndex = this.messages.findIndex(m => m.id === doc.$id);
+            if (messageIndex !== -1) {
+              this.messages.splice(messageIndex, 1);
+              this.cdr.detectChanges();
+            }
+            return;
+          }
+
           // Ignore duplicates for messages we just optimistically added: if exists by id, skip
           // Deduplicate: ignore if a message with same id already exists
           if (this.messages.some(m => m.id === doc.$id)) return;
@@ -923,6 +1039,13 @@ export class ChatComponent implements OnInit, OnDestroy{
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       this.sendTextMessage();
+    }
+  }
+
+  onKeydown(event: KeyboardEvent) {
+    // Close emoji picker with Escape key
+    if (event.key === 'Escape' && this.isEmojiPickerOpen) {
+      this.closeEmojiPicker();
     }
   }
 
@@ -1071,6 +1194,52 @@ export class ChatComponent implements OnInit, OnDestroy{
     });
   }
 
+  // Check if there are any remaining messages for a user and update lastMessage accordingly
+  private async checkAndUpdateLastMessageForUser(chatId: string, myCustomId: string) {
+    // Clear any existing timeout for this user
+    const existingTimeout = this.messageCheckTimeouts.get(chatId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+    
+    // Debounce the check to prevent interference with online status updates
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        // Get all remaining messages for this conversation
+        const remainingMessages = await this.appWrite.listMessages(chatId, myCustomId, 1);
+        
+        const userIndex = this.users.findIndex(u => u.userId === chatId);
+        if (userIndex !== -1) {
+          if (remainingMessages.length === 0) {
+            // No messages left, clear the lastMessage
+            this.users[userIndex].lastMessage = '';
+            this.users[userIndex].lastMessageTimestamp = undefined;
+          } else {
+            // Update with the actual last message
+            const lastMsg = remainingMessages[0];
+            this.users[userIndex].lastMessage = lastMsg['type'] === 'audio' ? 'Audio message' : lastMsg['text'] || '';
+            this.users[userIndex].lastMessageTimestamp = new Date(lastMsg['sentAt']);
+          }
+          this.cdr.detectChanges();
+        }
+      } catch (e) {
+        console.error('Failed to check remaining messages for user', chatId, e);
+        // On error, still try to clear the lastMessage as a fallback
+        const userIndex = this.users.findIndex(u => u.userId === chatId);
+        if (userIndex !== -1) {
+          this.users[userIndex].lastMessage = '';
+          this.users[userIndex].lastMessageTimestamp = undefined;
+          this.cdr.detectChanges();
+        }
+      } finally {
+        // Clean up the timeout reference
+        this.messageCheckTimeouts.delete(chatId);
+      }
+    }, 500); // 500ms debounce
+    
+    this.messageCheckTimeouts.set(chatId, timeoutId);
+  }
+
   // Persist and restore unread counts across refreshes using localStorage
   private persistUnreadCounts() {
     try {
@@ -1134,8 +1303,10 @@ export class ChatComponent implements OnInit, OnDestroy{
       input: 'text',
       inputLabel: 'Enter your friend\'s User ID',
       inputPlaceholder: 'e.g., john_doe123',
-      allowOutsideClick: false,
-      allowEscapeKey: false,
+      allowOutsideClick: true,
+      allowEscapeKey: true,
+      showCancelButton: true,
+      cancelButtonText: 'Cancel',
       inputValidator: (value: string) => {
         if (!value || value.trim().length < 3) {
           return 'Please enter at least 3 characters';
@@ -1186,9 +1357,21 @@ export class ChatComponent implements OnInit, OnDestroy{
 
   async acceptRequest(reqId: string) {
     try {
+      // Get the requester ID before accepting the request
+      const request = this.pendingRequests.find(req => req.$id === reqId);
+      const requesterId = request?.requesterId;
+      
       await this.appWrite.acceptFriendRequest(reqId);
       await this.refreshPendingRequests();
       await this.loadOnlineUsers();
+      
+      // If the accepted user is currently selected, update friendship status and show composer
+      if (requesterId && this.selectedUserId === requesterId) {
+        // Update friendship status for the selected user
+        this.isFriendsWithSelected = true;
+        this.isChatBlocked = false;
+      }
+      
       this.cdr.detectChanges();
       Swal.fire({ title: 'Friend added!', icon: 'success', timer: 1200, showConfirmButton: false });
     } catch (e: any) {
@@ -1205,5 +1388,39 @@ export class ChatComponent implements OnInit, OnDestroy{
     } catch (e: any) {
       Swal.fire({ title: 'Error', text: e.message || 'Failed to decline request', icon: 'error' });
     }
+  }
+
+  // Emoji picker methods
+  toggleEmojiPicker() {
+    this.isEmojiPickerOpen = !this.isEmojiPickerOpen;
+  }
+
+  closeEmojiPicker() {
+    this.isEmojiPickerOpen = false;
+  }
+
+  insertEmoji(emoji: string) {
+    // Insert emoji at cursor position in textarea
+    const textarea = document.querySelector('textarea[ngModel="message"]') as HTMLTextAreaElement;
+    if (textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = this.message;
+      
+      // Insert emoji at cursor position
+      this.message = text.substring(0, start) + emoji + text.substring(end);
+      
+      // Set cursor position after the emoji
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + emoji.length, start + emoji.length);
+      }, 0);
+    } else {
+      // Fallback: append emoji to end of message
+      this.message += emoji;
+    }
+    
+    // Close emoji picker
+    this.closeEmojiPicker();
   }
 }

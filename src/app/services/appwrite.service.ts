@@ -207,18 +207,38 @@ export class AppwriteService {
   }
 
   async listMessages(chatIdA: string, chatIdB?: string, limit: number = 50) {
-    // chatId represents the recipient's userId; we now store senderId as sender's userId
-    const chatIds = chatIdB ? [chatIdA, chatIdB] : [chatIdA];
-    const result = await this.databases.listDocuments(
-      environment.appwriteDatabaseId,
-      environment.appwriteMessagesCollectionId,
-      [
-        Query.equal('chatId', chatIds),
-        Query.orderAsc('sentAt'),
-        Query.limit(limit)
-      ]
-    );
-    return result.documents;
+    // Load messages between two users (bidirectional conversation)
+    if (chatIdB) {
+      // Get messages in both directions: A->B and B->A
+      const result = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteMessagesCollectionId,
+        [
+          Query.or([
+            Query.and([Query.equal('chatId', chatIdA), Query.equal('senderId', chatIdB)]),
+            Query.and([Query.equal('chatId', chatIdB), Query.equal('senderId', chatIdA)])
+          ]),
+          Query.orderAsc('sentAt'),
+          Query.limit(limit)
+        ]
+      );
+      return result.documents;
+    } else {
+      // Single user case - get all messages where this user is either sender or recipient
+      const result = await this.databases.listDocuments(
+        environment.appwriteDatabaseId,
+        environment.appwriteMessagesCollectionId,
+        [
+          Query.or([
+            Query.equal('chatId', chatIdA),
+            Query.equal('senderId', chatIdA)
+          ]),
+          Query.orderAsc('sentAt'),
+          Query.limit(limit)
+        ]
+      );
+      return result.documents;
+    }
   }
 
   async listAllMessages(userId: string, limit: number = 1000) {
@@ -281,9 +301,12 @@ export class AppwriteService {
       const isDelete = events.some((e: string) => e.endsWith('.delete'));
       const document = event?.payload;
       if (!document) return;
-      const chatMatch = document.chatId === userIdA || document.chatId === userIdB;
-      const senderMatch = document.senderId === userIdA || document.senderId === userIdB;
-      if (chatMatch && senderMatch) {
+      // Only match messages between the two users (bidirectional conversation)
+      const isMessageBetweenUsers = 
+        (document.chatId === userIdA && document.senderId === userIdB) ||
+        (document.chatId === userIdB && document.senderId === userIdA);
+      
+      if (isMessageBetweenUsers) {
         if (isCreate) {
           handler(document);
         } else if (isDelete) {
@@ -454,13 +477,12 @@ export class AppwriteService {
       throw new Error('Friends collection not configured');
     }
     
-    return await this.databases.updateDocument(
+    // Delete the friend request instead of just marking it as declined
+    // This allows users to resend friend requests after declining
+    return await this.databases.deleteDocument(
       environment.appwriteDatabaseId,
       environment.appwriteFriendsCollectionId,
-      friendshipId,
-      {
-        status: 'declined'
-      }
+      friendshipId
     );
   }
 
